@@ -5,6 +5,8 @@ import './App.css'
 import * as ecc from '@cmdcode/crypto-utils'
 import { Address, Signer, Tap, Tx } from '@cmdcode/tapscript'
 import * as bitcoin from 'bitcoinjs-lib'
+import { isP2MS, isP2TR, isP2SHScript } from 'bitcoinjs-lib/src/psbt/psbtutils'
+import { toXOnly } from 'bitcoinjs-lib/src/psbt/bip371'
 import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
@@ -72,7 +74,6 @@ function App() {
     }
     let fee = await getRecommendedFees();
     let revealPublicKey = ecc.keys.get_pubkey(String(revealPrivateKey), true);
-    const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
     const script = createInscriptionScript(revealPublicKey, content, mimeType);
     const tapleaf = Tap.encodeScript(script);
     const tpubkey = Tap.getPubKey(revealPublicKey,{target: tapleaf});
@@ -91,6 +92,46 @@ function App() {
     console.log(estimatedInscriptionFee);
     console.log(selectedUtxos);
 
+    
+    const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+    // 1. inputs
+    const addressScript = bitcoin.address.toOutputScript(address, bitcoin.networks.testnet);
+    for (let i = 0; i < selectedUtxos.length; i++) {
+      const utxo = selectedUtxos[i];
+      psbt.addInput({
+        hash: utxo.txid,
+        index: utxo.vout,
+        witnessUtxo: {
+          script: addressScript,
+          value: BigInt(utxo.value)
+        }
+      });
+
+      // taproot
+      if (isP2TR(addressScript)) {
+        psbt.updateInput(i, {
+          tapInternalKey: toXOnly(Buffer.from(publicKey, 'hex')),
+        });
+      }
+
+      // TODO: Add support for P2PKH (1), Nested segwit (3)
+    }
+
+    //2. outputs
+    psbt.addOutput({
+      address: inscriberAddress,
+      value: BigInt(estimatedRevealFee)
+    });
+
+    let change = selectedUtxos.reduce((acc, utxo) => acc + utxo.value, 0) - estimatedRevealFee;
+    if (change >= 546) {
+      psbt.addOutput({
+        address: address,
+        value: change
+      });
+    }
+
+    return psbt;
   }
 
   const getRecommendedFees = async() => {
@@ -177,6 +218,7 @@ function App() {
     explore(utxos, [], 0, 0);
     return bestSolution;
   }
+
 
   const createInscriptionScript = (revealPublicKey, content, mimeType) => {
     let ec = new TextEncoder();
