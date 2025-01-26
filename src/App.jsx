@@ -304,3 +304,9 @@ function App() {
 }
 
 export default App
+
+//TODO: Support for P2PKH and Nested Segwit
+//TODO: Support for different wallets
+//TODO: Tighten up the fee estimation
+//TODO: Add support for multiple inscriptions
+//TODO: Add support for delegates
