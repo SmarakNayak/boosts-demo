@@ -63,8 +63,12 @@ function App() {
     let mimeType = "text/plain;charset=UTF-8";
     console.log(content);
     console.log(privateKey);
-    let utxos = await getConfirmedCardinalUTXOs(address);
-    let lol = getCommitTx(content, mimeType, address, publicKey, privateKey);
+    let [commitTx, revealFee] = await getCommitTx(content, mimeType, address, publicKey, privateKey);
+    let signedCommitTx = await unisatProvider.signPsbt(commitTx.toHex());
+    let broadcastedCommitTx = await unisatProvider.pushPsbt(signedCommitTx);
+    console.log(broadcastedCommitTx);
+    let broadcastedRevealTx = await getRevealTx(content, mimeType, address, publicKey, privateKey, broadcastedCommitTx, revealFee);
+    console.log(broadcastedRevealTx);
   }
 
   const getCommitTx = async(content, mimeType, address, publicKey, revealPrivateKey) => {
@@ -83,9 +87,9 @@ function App() {
       "testnet"
     )
     console.log(inscriberAddress);
-    let estimatedCommitSize = 170;
+    let estimatedCommitSize = 154;
     let estimatedCommitFee = fee * estimatedCommitSize;
-    let estimatedRevealFee = (contentLength * fee)/4 + 1000 + 546;
+    let estimatedRevealFee = Math.ceil((contentLength * fee)/4) + 1000 + 546;
     let estimatedInscriptionFee = estimatedCommitFee + estimatedRevealFee;
     let utxos = await getConfirmedCardinalUTXOs(address);
     let selectedUtxos = selectUTXOS(utxos, estimatedInscriptionFee);
@@ -103,7 +107,7 @@ function App() {
         index: utxo.vout,
         witnessUtxo: {
           script: addressScript,
-          value: BigInt(utxo.value)
+          value: utxo.value
         }
       });
 
@@ -120,10 +124,10 @@ function App() {
     //2. outputs
     psbt.addOutput({
       address: inscriberAddress,
-      value: BigInt(estimatedRevealFee)
+      value: estimatedRevealFee
     });
 
-    let change = selectedUtxos.reduce((acc, utxo) => acc + utxo.value, 0) - estimatedRevealFee;
+    let change = selectedUtxos.reduce((acc, utxo) => acc + utxo.value, 0) - estimatedInscriptionFee;
     if (change >= 546) {
       psbt.addOutput({
         address: address,
@@ -131,7 +135,56 @@ function App() {
       });
     }
 
-    return psbt;
+    return [psbt, estimatedRevealFee];
+  }
+
+  const getRevealTx = async(content, mimeType, address, publicKey, revealPrivateKey, commitTxId, revealFee) => {
+    const secKey = ecc.keys.get_seckey(revealPrivateKey);
+    const pubKey = ecc.keys.get_pubkey(revealPrivateKey, true);
+    const script = createInscriptionScript(pubKey, content, mimeType);
+    const tapleaf = Tap.encodeScript(script);
+    const [tpubkey, cblock] = Tap.getPubKey(pubKey, { target: tapleaf });
+
+    let txData = Tx.create({
+      vin: [{
+        txid: commitTxId,
+        vout: 0,
+        prevout: {
+          value: revealFee,
+          scriptPubKey: ['OP_1', tpubkey]
+        }
+      }],
+      vout: [{
+        value: 546,
+        scriptPubKey: Address.toScriptPubKey(address)
+      }]
+    });
+
+    const sig = Signer.taproot.sign(secKey, txData, 0, { extension: tapleaf });
+    txData.vin[0].witness = [sig, script, cblock];
+    console.log(Tx.encode(txData).hex);
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    return await broadcastTx(Tx.encode(txData).hex);
+  }
+
+  async function broadcastTx(txHex) {
+    const url = `https://mempool.space/testnet4/api/tx`;
+  
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: txHex,
+    });
+  
+    if (!response.ok) {
+      console.log(response);
+      throw new Error(`Failed to broadcast transaction: ${response.statusText}`);
+    }
+  
+    const data = await response.text();
+    return data;
   }
 
   const getRecommendedFees = async() => {
@@ -146,9 +199,10 @@ function App() {
     let utxos = await fetch(`https://mempool.space/testnet4/api/address/${address}/utxo`);
     let utxosJson = await utxos.json();
     console.log(utxosJson);
-    let confirmedUtxos = utxosJson.filter(utxo => utxo.status.confirmed);
+    let confirmedUtxos = utxosJson.filter(utxo => utxo.status.confirmed == true);
+    confirmedUtxos = confirmedUtxos.filter(utxo => utxo.value > 1000);
     console.log(confirmedUtxos);
-    return utxosJson;
+    return confirmedUtxos;
   }
 
   const selectUTXOS = (utxos, targetAmount) => {
