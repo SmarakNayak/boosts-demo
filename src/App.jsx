@@ -23,6 +23,61 @@ async function generatePrivateKey() {
   return root?.derivePath("m/44'/0'/0'/0/0").privateKey
 }
 
+class Inscription {
+  constructor({
+    content = null,
+    contentType = null,
+    contentEncoding = null,
+    metaprotocol = null,
+    //parent = null,
+    delegate = null,
+    //pointer = null,
+    //metadata = null,
+    //rune = null,
+  }) {
+    this.content = content;
+    this.contentType = contentType;
+    this.contentEncoding = contentEncoding;
+    this.metaprotocol = metaprotocol;
+    //this.parent = parent;
+    this.delegate = delegate;
+    //this.pointer = pointer;
+    //this.metadata = metadata;
+    //this.rune = rune;
+  }
+
+  getInscriptionScript() {
+    let ec = new TextEncoder();
+    const script = ['OP_0', 'OP_IF', ec.encode('ord')];
+    if (this.contentType !== null) {
+      script.push('01', ec.encode(this.contentType));
+    }
+    if (this.contentEncoding !== null) {
+      script.push('09', ec.encode(this.contentEncoding));
+    }
+    if (this.metaprotocol !== null) {
+      script.push('7', ec.encode(this.metaprotocol));
+    }
+    if (this.delegate !== null) {
+      script.push('11', getDelegateBytes(this.delegate));
+    }
+    if (this.metadata !== null) {
+      //script.push('5', ec.encode(this.metadata));
+    }
+
+    if (this.content !== null && this.content.length > 0) {
+      script.push("OP_0");
+      const contentChunks = [];
+      for (let i = 0; i < content.length; i += 520) {
+        contentChunks.push(content.subarray(i, i + 520));
+      }
+      script.push(...contentChunks);
+    }
+
+    script.push('OP_ENDIF');
+  }
+}
+
 function App() {
   const [unisatProvider, setUnisatProvider] = useState(null);
   const [address, setAddress] = useState(null);
@@ -59,8 +114,8 @@ function App() {
   const createInscription = async () => {
     let privateKeyBuffer = await generatePrivateKey();
     let privateKey = Buffer.from(privateKeyBuffer).toString('hex');
-    let content = "Hello World".toString('base64');
-    let mimeType = "text/plain;charset=UTF-8";
+    let content = "Hello World";
+    let mimeType = "text/plain;charset=utf-8";
     console.log(content);
     console.log(privateKey);
     let [commitTx, revealFee] = await getCommitTx(content, mimeType, address, publicKey, privateKey);
@@ -69,6 +124,46 @@ function App() {
     console.log(broadcastedCommitTx);
     let broadcastedRevealTx = await getRevealTx(content, mimeType, address, publicKey, privateKey, broadcastedCommitTx, revealFee);
     console.log(broadcastedRevealTx);
+  }
+
+  const getRevealScript = (inscriptions, revealPublicKey) => {
+    let script = [revealPublicKey, 'OP_CHECKSIG'];
+    for (let i = 0; i < inscriptions.length; i++) {
+      const inscription = inscriptions[i];
+      const inscriptionScript = inscription.getInscriptionScript();
+      script.push(...inscriptionScript);
+    }
+  }
+
+  const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId, revealFee) => {
+    const secKey = ecc.keys.get_seckey(revealPrivateKey);
+    const pubKey = ecc.keys.get_pubkey(revealPrivateKey, true);
+    const script = getRevealScript(inscriptions, pubKey);
+    const tapleaf = Tap.encodeScript(script);
+    const [tpubkey, cblock] = Tap.getPubKey(pubKey, { target: tapleaf });
+
+    let inputs = [{
+      txid: commitTxId,
+      vout: 0
+    }];
+
+    let outputs = inscriptions.map(() => ({
+      value: 546,
+      scriptPubKey: Address.toScriptPubKey(inscriptionReceiveAddress)
+    }));
+
+    let txData = Tx.create({
+      vin: inputs,
+      vout: outputs
+    });
+
+    const sig = Signer.taproot.sign(secKey, txData, 0, { extension: tapleaf });
+    txData.vin[0].witness = [sig, script, cblock];
+
+    let sizeData = Tx.util.getTxSize(txData);
+    let vSize = sizeData.vsize;
+
+    return [txData, vSize];
   }
 
   const getCommitTx = async(content, mimeType, address, publicKey, revealPrivateKey) => {
@@ -277,18 +372,44 @@ function App() {
   const createInscriptionScript = (revealPublicKey, content, mimeType) => {
     let ec = new TextEncoder();
     let marker = ec.encode('ord');
-    let INSCRIPTION_SIZE = 546;
 
-    let contentBuffer = Buffer.from(content, 'base64');
+    let contentBuffer = Buffer.from(content, 'utf8');
     const contentChunks = [];
     for (let i = 0; i < contentBuffer.length; i += 520) {
       contentChunks.push(contentBuffer.subarray(i, i + 520));
     }
 
     const script = [revealPublicKey, 'OP_CHECKSIG'];
-    script.push('OP_0', 'OP_IF', marker, '01',ec.encode(mimeType), 'OP_0');
+    script.push('OP_0', 'OP_IF', marker, '01', ec.encode(mimeType), 'OP_0');
     script.push(...contentChunks, 'OP_ENDIF');
     return script;
+  }
+
+  const createDelegateScript = (revealPublicKey, delegateId, mimeType) => {
+    let ec = new TextEncoder();
+    let marker = ec.encode('ord');
+
+    const script = [revealPublicKey, 'OP_CHECKSIG'];
+    script.push('OP_0', 'OP_IF', marker, '01', ec.encode(mimeType));
+    script.push('11', getDelegateBytes(delegateId));
+    script.push('OP_ENDIF');
+    return script;
+  }
+
+  const getDelegateBytes = (delegateId) => {
+    const [txHash, index] = delegateId.split("i");
+    const txHashBytes = Buffer.from(txHash, 'hex').reverse();
+    const indexBytes = indexToBytes(parseInt(index));
+    return Buffer.concat([txHashBytes, indexBytes]);
+  }
+
+  function indexToBytes(value) {
+    const bytes = [];
+    while (value > 0) {
+      bytes.push(value & 0xff); //push smallest byte
+      value >>= 8; //shift right 1 byte, look at next smallest byte
+    }
+    return Buffer.from(bytes);
   }
 
 
