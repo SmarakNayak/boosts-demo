@@ -5,7 +5,7 @@ import './App.css'
 import * as ecc from '@cmdcode/crypto-utils'
 import { Address, Signer, Tap, Tx } from '@cmdcode/tapscript'
 import * as bitcoin from 'bitcoinjs-lib'
-import { isP2MS, isP2TR, isP2SHScript } from 'bitcoinjs-lib/src/psbt/psbtutils'
+import { isP2PKH, isP2SHScript, isP2WPKH, isP2TR } from 'bitcoinjs-lib/src/psbt/psbtutils'
 import { toXOnly } from 'bitcoinjs-lib/src/psbt/bip371'
 import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
@@ -50,10 +50,10 @@ class Inscription {
     let ec = new TextEncoder();
     const script = ['OP_0', 'OP_IF', ec.encode('ord')];
     if (this.contentType !== null) {
-      script.push('01', ec.encode(this.contentType));
+      script.push('1', ec.encode(this.contentType));
     }
     if (this.contentEncoding !== null) {
-      script.push('09', ec.encode(this.contentEncoding));
+      script.push('9', ec.encode(this.contentEncoding));
     }
     if (this.metaprotocol !== null) {
       script.push('7', ec.encode(this.metaprotocol));
@@ -133,9 +133,10 @@ function App() {
       const inscriptionScript = inscription.getInscriptionScript();
       script.push(...inscriptionScript);
     }
+    return script;
   }
 
-  const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId, revealFee) => {
+  const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId) => {
     const secKey = ecc.keys.get_seckey(revealPrivateKey);
     const pubKey = ecc.keys.get_pubkey(revealPrivateKey, true);
     const script = getRevealScript(inscriptions, pubKey);
@@ -166,6 +167,70 @@ function App() {
     return [txData, vSize];
   }
 
+  const getCommitTransaction = async(inscriptions, paymentAddress, paymentPublicKey, revealPrivateKey, revealVSize) => {
+    let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
+    let revealScript = getRevealScript(inscriptions, revealPublicKey);
+    let tapleaf = Tap.encodeScript(revealScript); // sha256 hash of the script buffer in hex
+    const [tRevealPublicKey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapleaf }); // tweak the public key using the tapleaf
+    const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey[0], "testnet");
+
+    const paymentAddressScript = bitcoin.address.toOutputScript(paymentAddress, bitcoin.networks.testnet);
+    const paymentAddressType = getAddressType(paymentAddressScript);
+
+    let feeRate = await getRecommendedFees();
+    let estimatedCommitFeeForHeaderAndOutputs = (10.5 + 2 * 43) * feeRate; //tx header 10.5 vBytes, 2 taproot outputs 43 vBytes each - input vB handled in selection
+    let estimatedRevealFee = revealVSize * feeRate + inscriptions.length * 546;
+
+    let utxos = await getConfirmedCardinalUtxos(paymentAddress);
+    let adjustedUtxos = appendUtxoEffectiveValues(utxos, paymentAddressType, feeRate); //adjust utxos values to account for fee for size of input
+    let selectedUtxos = selectUtxos(adjustedUtxos, estimatedRevealFee + estimatedCommitFeeForHeaderAndOutputs);
+
+    let estimatedCommitFeeForInputs = selectedUtxos.reduce((acc, utxo) => acc + utxo.value - utxo.effectiveValue, 0) * feeRate;
+    let estimatedCommitFee = estimatedCommitFeeForHeaderAndOutputs + estimatedCommitFeeForInputs;
+    let estimatedInscriptionFee = estimatedCommitFee + estimatedRevealFee;
+
+    const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+    
+    // 1. inputs
+    for (let i = 0; i < selectedUtxos.length; i++) {
+      const utxo = selectedUtxos[i];
+      psbt.addInput({
+        hash: utxo.txid,
+        index: utxo.vout,
+        witnessUtxo: {
+          script: addressScript,
+          value: utxo.value
+        }
+      });
+
+      // taproot
+      if (isP2TR(addressScript)) {
+        psbt.updateInput(i, {
+          tapInternalKey: toXOnly(Buffer.from(paymentPublicKey, 'hex')),
+        });
+      }
+
+      // TODO: Add support for P2PKH (1), Nested segwit (3)
+    }
+
+    //2. outputs
+    psbt.addOutput({
+      address: commitAddress,
+      value: estimatedRevealFee
+    });
+
+    let change = selectedUtxos.reduce((acc, utxo) => acc + utxo.value, 0) - estimatedInscriptionFee;
+    if (change >= 546) {
+      psbt.addOutput({
+        address: address,
+        value: change
+      });
+    }
+
+    return psbt;
+
+  }
+
   const getCommitTx = async(content, mimeType, address, publicKey, revealPrivateKey) => {
     let contentLength = Buffer.byteLength(content);
     if (contentLength > 390_000) {
@@ -186,8 +251,8 @@ function App() {
     let estimatedCommitFee = fee * estimatedCommitSize;
     let estimatedRevealFee = Math.ceil((contentLength * fee)/4) + 1000 + 546;
     let estimatedInscriptionFee = estimatedCommitFee + estimatedRevealFee;
-    let utxos = await getConfirmedCardinalUTXOs(address);
-    let selectedUtxos = selectUTXOS(utxos, estimatedInscriptionFee);
+    let utxos = await getConfirmedCardinalUtxos(address);
+    let selectedUtxos = selectUtxos(utxos, estimatedInscriptionFee);
     console.log(estimatedInscriptionFee);
     console.log(selectedUtxos);
 
@@ -289,7 +354,7 @@ function App() {
     return fastestFee;
   }
 
-  const getConfirmedCardinalUTXOs = async(address) => {
+  const getConfirmedCardinalUtxos = async(address) => {
     // "https://ordinals.com/outputs/<address>?type=cardinal"
     let utxos = await fetch(`https://mempool.space/testnet4/api/address/${address}/utxo`);
     let utxosJson = await utxos.json();
@@ -300,12 +365,37 @@ function App() {
     return confirmedUtxos;
   }
 
-  const selectUTXOS = (utxos, targetAmount) => {
-    utxos.sort((a, b) => a.value - b.value);
+  const appendUtxoEffectiveValues = (utxos, addressType, feeRate) => {
+    //https://bitcoin.stackexchange.com/questions/84004/how-do-virtual-size-stripped-size-and-raw-size-compare-between-legacy-address-f/84006#84006
+    if (addressType === 'P2TR') {
+      utxos.map(utxo => {
+        utxo.effectiveValue = utxo.value - feeRate * (40 + 1 + 66/4);
+      });
+    }
+    if (addressType === 'P2WPKH') {
+      utxos.map(utxo => {
+        utxo.effectiveValue = utxo.value - feeRate * (40 + 1 + 108/4);
+      });
+    }
+    if (addressType === 'P2SH-P2WPKH') {
+      utxos.map(utxo => {
+        utxo.effectiveValue = utxo.value - feeRate * (40 + 24 + 108/4);
+      });
+    }
+    if (addressType === 'P2PKH') {
+      utxos.map(utxo => {
+        utxo.effectiveValue = utxo.value - feeRate * (40 + 108);
+      });
+    }
+    return utxos;
+  }
+
+  const selectUtxos = (utxos, targetAmount) => {
+    utxos.sort((a, b) => a.effectiveValue - b.effectiveValue);
     
     // 1. Exact match
     for (let i = 0; i < utxos.length; i++) {
-      if (utxos[i].value === targetAmount) {
+      if (utxos[i].effectiveValue === targetAmount) {
         return [utxos[i]];
       }
     }
@@ -321,7 +411,7 @@ function App() {
     totalInput = 0;
     for (let i = 0; i < utxos.length; i++) {
       selected.push(utxos[i]);
-      totalInput += utxos[i].value;
+      totalInput += utxos[i].effectiveValue;
       if (totalInput >= targetAmount) {
         return selected;
       }
@@ -412,6 +502,22 @@ function App() {
     return Buffer.from(bytes);
   }
 
+  const getAddressType = (addressScript) => {
+    if (isP2TR(addressScript)) {
+      return 'P2TR';
+    }
+    if (isP2WPKH(addressScript)) {
+      return 'P2WPKH';
+    }
+    if (isP2SHScript(addressScript)) {
+      return 'P2SH-P2WPKH';
+    }
+    if (isP2PKH(addressScript)) {
+      return 'P2PKH';
+    }
+    return 'UNKNOWN';
+  }
+
 
   return (
     <> 
@@ -429,6 +535,3 @@ export default App
 //TODO: Backup Reveal Tx
 //TODO: Support for P2PKH and Nested Segwit
 //TODO: Support for different wallets
-//TODO: Tighten up the fee estimation
-//TODO: Add support for multiple inscriptions
-//TODO: Add support for delegates
