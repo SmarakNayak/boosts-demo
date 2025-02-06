@@ -114,16 +114,18 @@ function App() {
   const createInscription = async () => {
     let privateKeyBuffer = await generatePrivateKey();
     let privateKey = Buffer.from(privateKeyBuffer).toString('hex');
-    let content = "Hello World";
-    let mimeType = "text/plain;charset=utf-8";
-    console.log(content);
-    console.log(privateKey);
-    let [commitTx, revealFee] = await getCommitTx(content, mimeType, address, publicKey, privateKey);
-    let signedCommitTx = await unisatProvider.signPsbt(commitTx.toHex());
-    let broadcastedCommitTx = await unisatProvider.pushPsbt(signedCommitTx);
-    console.log(broadcastedCommitTx);
-    let broadcastedRevealTx = await getRevealTx(content, mimeType, address, publicKey, privateKey, broadcastedCommitTx, revealFee);
-    console.log(broadcastedRevealTx);
+    let utxos = await getConfirmedCardinalUtxos(address);
+    console.log(utxos);
+    // let content = "Hello World";
+    // let mimeType = "text/plain;charset=utf-8";
+    // console.log(content);
+    // console.log(privateKey);
+    // let [commitTx, revealFee] = await getCommitTx(content, mimeType, address, publicKey, privateKey);
+    // let signedCommitTx = await unisatProvider.signPsbt(commitTx.toHex());
+    // let broadcastedCommitTx = await unisatProvider.pushPsbt(signedCommitTx);
+    // console.log(broadcastedCommitTx);
+    // let broadcastedRevealTx = await getRevealTx(content, mimeType, address, publicKey, privateKey, broadcastedCommitTx, revealFee);
+    // console.log(broadcastedRevealTx);
   }
 
   const getRevealScript = (inscriptions, revealPublicKey) => {
@@ -194,23 +196,54 @@ function App() {
     // 1. inputs
     for (let i = 0; i < selectedUtxos.length; i++) {
       const utxo = selectedUtxos[i];
-      psbt.addInput({
-        hash: utxo.txid,
-        index: utxo.vout,
-        witnessUtxo: {
-          script: addressScript,
-          value: utxo.value
-        }
-      });
 
-      // taproot
-      if (isP2TR(addressScript)) {
-        psbt.updateInput(i, {
-          tapInternalKey: toXOnly(Buffer.from(paymentPublicKey, 'hex')),
-        });
+      switch (paymentAddressType) {
+        case 'P2TR':
+          psbt.addInput({
+            hash: utxo.txid,
+            index: utxo.vout,
+            witnessUtxo: {
+              script: paymentAddressScript,
+              value: utxo.value
+            },
+            tapInternalKey: toXOnly(Buffer.from(paymentPublicKey, 'hex')),
+          });
+          break;
+        case 'P2WPKH':
+          psbt.addInput({
+            hash: utxo.txid,
+            index: utxo.vout,
+            witnessUtxo: {
+              script: paymentAddressScript,
+              value: utxo.value
+            }
+          });
+          break;
+        case 'P2SH-P2WPKH':
+          const p2wpkh = bitcoin.payments.p2wpkh({
+            pubkey: Buffer.from(paymentPublicKey, 'hex')
+          });
+          psbt.addInput({
+            hash: utxo.txid,
+            index: utxo.vout,
+            witnessUtxo: {
+              script: paymentAddressScript,
+              value: utxo.value
+            },
+            redeemScript: p2wpkh.output
+          });
+          break;
+        case 'P2PKH':
+          const prevTx = await getTxData(utxo.txid);
+          psbt.addInput({
+            hash: utxo.txid,
+            index: utxo.vout,
+            nonWitnessUtxo: Buffer.from(prevTx, 'hex'),
+          });
+          break;
+        default:
+          throw new Error("Unsupported address type");
       }
-
-      // TODO: Add support for P2PKH (1), Nested segwit (3)
     }
 
     //2. outputs
@@ -365,6 +398,12 @@ function App() {
     return confirmedUtxos;
   }
 
+  const getTxData = async(txId) => {
+    let txData = await fetch(`https://mempool.space/testnet4/api/tx/${txId}/hex`);
+    let txDataJson = await txData.json();
+    return txDataJson;
+  }
+
   const appendUtxoEffectiveValues = (utxos, addressType, feeRate) => {
     //https://bitcoin.stackexchange.com/questions/84004/how-do-virtual-size-stripped-size-and-raw-size-compare-between-legacy-address-f/84006#84006
     if (addressType === 'P2TR') {
@@ -502,7 +541,7 @@ function App() {
     return Buffer.from(bytes);
   }
 
-  const getAddressType = (addressScript) => {
+  const getAddressType = (addressScript, publicKey) => {
     if (isP2TR(addressScript)) {
       return 'P2TR';
     }
@@ -510,12 +549,37 @@ function App() {
       return 'P2WPKH';
     }
     if (isP2SHScript(addressScript)) {
-      return 'P2SH-P2WPKH';
+      // for nested segwit, we have:
+      // pubKey -> pubkeyhash -> pubkeyhashscript (witness program/p2pkh) -> pubkeyhashscripthash (witness program hash/scripthash) -> pubkeyhashscripthashscript (P2SH script)
+
+      // Parse the P2SH script (OP_HASH160 <scripthash> OP_EQUAL) to extract the witness program hash stored inside it
+      const p2sh = bitcoin.payments.p2sh({
+        output: addressScript,
+        network: bitcoin.networks.testnet
+      })
+
+      // Create pubkeyhash from pubkey
+      const pubkeyHash = bitcoin.crypto.hash160(Buffer.from(publicKey, 'hex'))
+
+      // Create the witness program (OP_0 <pubkeyhash>) that would be wrapped inside P2SH for this pubkey
+      const p2wpkh = bitcoin.payments.p2wpkh({
+        hash: pubkeyHash,
+        network: bitcoin.networks.testnet
+      })
+
+      // Check if:
+      // scripthash inside P2SH script (p2sh.hash) equals hash of witness program we generated (hash160(p2wpkh.output))
+      // If equal -> this P2SH script is wrapping the SegWit script for this pubkey
+      if (p2sh.hash.equals(bitcoin.crypto.hash160(p2wpkh.output))) {
+        return 'P2SH-P2WPKH'
+      } else {
+        throw new Error("Unsupported address type");
+      }
     }
     if (isP2PKH(addressScript)) {
       return 'P2PKH';
     }
-    return 'UNKNOWN';
+    throw new Error("Unsupported address type");
   }
 
 
@@ -533,5 +597,4 @@ function App() {
 export default App
 
 //TODO: Backup Reveal Tx
-//TODO: Support for P2PKH and Nested Segwit
 //TODO: Support for different wallets
