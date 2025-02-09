@@ -50,19 +50,19 @@ class Inscription {
     let ec = new TextEncoder();
     const script = ['OP_0', 'OP_IF', ec.encode('ord')];
     if (this.contentType !== null) {
-      script.push('1', ec.encode(this.contentType));
+      script.push(1, ec.encode(this.contentType));
     }
     if (this.contentEncoding !== null) {
-      script.push('9', ec.encode(this.contentEncoding));
+      script.push(9, ec.encode(this.contentEncoding));
     }
     if (this.metaprotocol !== null) {
-      script.push('7', ec.encode(this.metaprotocol));
+      script.push(7, ec.encode(this.metaprotocol));
     }
     if (this.delegate !== null) {
-      script.push('11', getDelegateBytes(this.delegate));
+      script.push(11, getDelegateBytes(this.delegate));
     }
     if (this.metadata !== null) {
-      //script.push('5', ec.encode(this.metadata));
+      //script.push(5, ec.encode(this.metadata));
     }
 
     if (this.content !== null && this.content.length > 0) {
@@ -130,7 +130,7 @@ function App() {
     console.log("Actual commit vsize", commitTx.virtualSize());
     let [revealTransaction, revealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, commitTxId, estimatedRevealFee);
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
-    await new Promise(resolve => setTimeout(resolve, 2500));
+    //await new Promise(resolve => setTimeout(resolve, 2500));
     let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
     console.log(pushedCommitTx, pushedRevealTx);
   }
