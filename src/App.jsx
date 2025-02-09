@@ -68,13 +68,14 @@ class Inscription {
     if (this.content !== null && this.content.length > 0) {
       script.push("OP_0");
       const contentChunks = [];
-      for (let i = 0; i < content.length; i += 520) {
-        contentChunks.push(content.subarray(i, i + 520));
+      for (let i = 0; i < this.content.length; i += 520) {
+        contentChunks.push(this.content.subarray(i, i + 520));
       }
       script.push(...contentChunks);
     }
 
     script.push('OP_ENDIF');
+    return script;
   }
 }
 
@@ -112,20 +113,26 @@ function App() {
   }
 
   const createInscription = async () => {
-    let privateKeyBuffer = await generatePrivateKey();
-    let privateKey = Buffer.from(privateKeyBuffer).toString('hex');
+    let revealPrivateKeyBuffer = await generatePrivateKey();
+    let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
     let utxos = await getConfirmedCardinalUtxos(address);
-    console.log(utxos);
-    // let content = "Hello World";
-    // let mimeType = "text/plain;charset=utf-8";
-    // console.log(content);
-    // console.log(privateKey);
-    // let [commitTx, revealFee] = await getCommitTx(content, mimeType, address, publicKey, privateKey);
-    // let signedCommitTx = await unisatProvider.signPsbt(commitTx.toHex());
-    // let broadcastedCommitTx = await unisatProvider.pushPsbt(signedCommitTx);
-    // console.log(broadcastedCommitTx);
-    // let broadcastedRevealTx = await getRevealTx(content, mimeType, address, publicKey, privateKey, broadcastedCommitTx, revealFee);
-    // console.log(broadcastedRevealTx);
+    let ec = new TextEncoder();
+    let inscriptions = [new Inscription({
+      content: ec.encode("Chancellor on the brink of second bailout for banks"),
+      contentType: "text/plain;charset=utf-8"
+    })];
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, "0".repeat(64), 0);
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, address, publicKey, revealPrivateKey, estRevealVSize);
+    let signedCommitHex = await unisatProvider.signPsbt(commitPsbt.toHex());
+    let signedPsbt = bitcoin.Psbt.fromHex(signedCommitHex);    
+    let commitTx = signedPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+    console.log("Actual commit vsize", commitTx.virtualSize());
+    let [revealTransaction, revealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, commitTxId, estimatedRevealFee);
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
+    console.log(pushedCommitTx, pushedRevealTx);
   }
 
   const getRevealScript = (inscriptions, revealPublicKey) => {
@@ -135,10 +142,11 @@ function App() {
       const inscriptionScript = inscription.getInscriptionScript();
       script.push(...inscriptionScript);
     }
+    console.log(script);
     return script;
   }
 
-  const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId) => {
+  const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId, revealFee) => {
     const secKey = ecc.keys.get_seckey(revealPrivateKey);
     const pubKey = ecc.keys.get_pubkey(revealPrivateKey, true);
     const script = getRevealScript(inscriptions, pubKey);
@@ -147,7 +155,11 @@ function App() {
 
     let inputs = [{
       txid: commitTxId,
-      vout: 0
+      vout: 0,
+      prevout:{
+        value: revealFee,
+        scriptPubKey: ['OP_1', tpubkey]
+      }
     }];
 
     let outputs = inscriptions.map(() => ({
@@ -174,21 +186,26 @@ function App() {
     let revealScript = getRevealScript(inscriptions, revealPublicKey);
     let tapleaf = Tap.encodeScript(revealScript); // sha256 hash of the script buffer in hex
     const [tRevealPublicKey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapleaf }); // tweak the public key using the tapleaf
-    const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey[0], "testnet");
+    const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey, "testnet");
 
     const paymentAddressScript = bitcoin.address.toOutputScript(paymentAddress, bitcoin.networks.testnet);
     const paymentAddressType = getAddressType(paymentAddressScript);
+    console.log(paymentAddressType);
 
     let feeRate = await getRecommendedFees();
     let estimatedCommitFeeForHeaderAndOutputs = (10.5 + 2 * 43) * feeRate; //tx header 10.5 vBytes, 2 taproot outputs 43 vBytes each - input vB handled in selection
-    let estimatedRevealFee = revealVSize * feeRate + inscriptions.length * 546;
+    let estimatedRevealFee = Math.ceil(revealVSize * feeRate + inscriptions.length * 546);
 
     let utxos = await getConfirmedCardinalUtxos(paymentAddress);
     let adjustedUtxos = appendUtxoEffectiveValues(utxos, paymentAddressType, feeRate); //adjust utxos values to account for fee for size of input
     let selectedUtxos = selectUtxos(adjustedUtxos, estimatedRevealFee + estimatedCommitFeeForHeaderAndOutputs);
+    console.log(selectedUtxos);
 
-    let estimatedCommitFeeForInputs = selectedUtxos.reduce((acc, utxo) => acc + utxo.value - utxo.effectiveValue, 0) * feeRate;
-    let estimatedCommitFee = estimatedCommitFeeForHeaderAndOutputs + estimatedCommitFeeForInputs;
+    let estimatedCommitFeeForInputs = selectedUtxos.reduce((acc, utxo) => acc + utxo.value - utxo.effectiveValue, 0);
+    let estimatedCommitFee = Math.ceil(estimatedCommitFeeForHeaderAndOutputs + estimatedCommitFeeForInputs);
+    console.log("Estimated commit fee: ", estimatedCommitFee, ". estimated commit vsize:", estimatedCommitFee / feeRate);
+    console.log("Estimated commit input vsize: ", estimatedCommitFeeForInputs / feeRate, ". estimated commit output + header vsize:", estimatedCommitFeeForHeaderAndOutputs / feeRate);
+    console.log("Estimated reveal fee: ", estimatedRevealFee);
     let estimatedInscriptionFee = estimatedCommitFee + estimatedRevealFee;
 
     const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
@@ -260,7 +277,7 @@ function App() {
       });
     }
 
-    return psbt;
+    return [psbt, estimatedRevealFee];
 
   }
 
@@ -380,6 +397,26 @@ function App() {
     return data;
   }
 
+  async function submitPackage(commitHex, revealHex) {
+    const url = `https://mempool.space/testnet4/api/v1/txs/package?maxfeerate=100`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify([commitHex, revealHex]),
+    });
+
+    if (!response.ok) {
+      console.log(response);
+      throw new Error(`Failed to broadcast transactions: ${response.statusText}`);
+    }
+
+    const data = await response.text();
+    return data;
+  }
+
   const getRecommendedFees = async() => {
     let fees = await fetch("https://mempool.space/testnet4/api/v1/fees/recommended");
     let feesJson = await fees.json();
@@ -474,7 +511,7 @@ function App() {
         return;
       }
       // Pruning: unreachable target
-      if (currentSum + remainingUtxos.reduce((acc, utxo) => acc + utxo.value, 0) < targetAmount) {
+      if (currentSum + remainingUtxos.reduce((acc, utxo) => acc + utxo.effectiveValue, 0) < targetAmount) {
         return;
       }
       // Pruning: too deep
@@ -489,7 +526,7 @@ function App() {
         // repeat until target is hit
         let newRemainingUtxos = remainingUtxos.slice(i + 1);
         let newSelectedUtxos = selectedUtxos.concat(remainingUtxos[i]);
-        let newSum = currentSum + remainingUtxos[i].value;
+        let newSum = currentSum + remainingUtxos[i].effectiveValue;
         explore(newRemainingUtxos, newSelectedUtxos, newSum, depth + 1);
       }
     }
