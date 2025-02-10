@@ -137,20 +137,28 @@ function App() {
     let revealPrivateKeyBuffer = await generatePrivateKey();
     let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
     let ec = new TextEncoder();
-    let inscriptions = [
+    // let inscriptions = [
+    //   new Inscription({
+    //     content: ec.encode("Chancellor on the brink of second bailout for banks"),
+    //     contentType: "text/plain;charset=utf-8"
+    //   }),
+    //   new Inscription({
+    //     content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
+    //     contentType: "text/plain;charset=utf-8"
+    //   }),
+    //   new Inscription({
+    //     content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
+    //     contentType: "text/plain;charset=utf-8"
+    //   }),
+    // ];
+    let inscriptions = Array(1000).fill().map(() => 
       new Inscription({
-        content: ec.encode("Chancellor on the brink of second bailout for banks"),
+        delegate: "d386e79a0c7639805c6a63eb0d1c3e5a616c9dc8cf0dd0691e7d5440e6a175a8i2",
+        postage: 330,
         contentType: "text/plain;charset=utf-8"
-      }),
-      new Inscription({
-        content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
-        contentType: "text/plain;charset=utf-8"
-      }),
-      new Inscription({
-        content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
-        contentType: "text/plain;charset=utf-8"
-      }),
-    ];
+      })
+    );
+
     let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, "0".repeat(64), 0);
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, address, publicKey, revealPrivateKey, estRevealVSize);
     let signedCommitHex = await unisatProvider.signPsbt(commitPsbt.toHex());
@@ -316,102 +324,6 @@ function App() {
 
   }
 
-  const getCommitTx = async(content, mimeType, address, publicKey, revealPrivateKey) => {
-    let contentLength = Buffer.byteLength(content);
-    if (contentLength > 390_000) {
-      console.log("Content too long");
-    }
-    let fee = await getRecommendedFees();
-    let revealPublicKey = ecc.keys.get_pubkey(String(revealPrivateKey), true);
-    const script = createInscriptionScript(revealPublicKey, content, mimeType);
-    const tapleaf = Tap.encodeScript(script);
-    const tpubkey = Tap.getPubKey(revealPublicKey,{target: tapleaf});
-    console.log(tpubkey);
-    const inscriberAddress = Address.p2tr.fromPubKey(
-      tpubkey[0],
-      "testnet"
-    )
-    console.log(inscriberAddress);
-    let estimatedCommitSize = 154;
-    let estimatedCommitFee = fee * estimatedCommitSize;
-    let estimatedRevealFee = Math.ceil((contentLength * fee)/4) + 1000 + 546;
-    let estimatedInscriptionFee = estimatedCommitFee + estimatedRevealFee;
-    let utxos = await getConfirmedCardinalUtxos(address);
-    let selectedUtxos = selectUtxos(utxos, estimatedInscriptionFee);
-    console.log(estimatedInscriptionFee);
-    console.log(selectedUtxos);
-
-    
-    const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
-    // 1. inputs
-    const addressScript = bitcoin.address.toOutputScript(address, bitcoin.networks.testnet);
-    for (let i = 0; i < selectedUtxos.length; i++) {
-      const utxo = selectedUtxos[i];
-      psbt.addInput({
-        hash: utxo.txid,
-        index: utxo.vout,
-        witnessUtxo: {
-          script: addressScript,
-          value: utxo.value
-        }
-      });
-
-      // taproot
-      if (isP2TR(addressScript)) {
-        psbt.updateInput(i, {
-          tapInternalKey: toXOnly(Buffer.from(publicKey, 'hex')),
-        });
-      }
-
-      // TODO: Add support for P2PKH (1), Nested segwit (3)
-    }
-
-    //2. outputs
-    psbt.addOutput({
-      address: inscriberAddress,
-      value: estimatedRevealFee
-    });
-
-    let change = selectedUtxos.reduce((acc, utxo) => acc + utxo.value, 0) - estimatedInscriptionFee;
-    if (change >= 546) {
-      psbt.addOutput({
-        address: address,
-        value: change
-      });
-    }
-
-    return [psbt, estimatedRevealFee];
-  }
-
-  const getRevealTx = async(content, mimeType, address, publicKey, revealPrivateKey, commitTxId, revealFee) => {
-    const secKey = ecc.keys.get_seckey(revealPrivateKey);
-    const pubKey = ecc.keys.get_pubkey(revealPrivateKey, true);
-    const script = createInscriptionScript(pubKey, content, mimeType);
-    const tapleaf = Tap.encodeScript(script);
-    const [tpubkey, cblock] = Tap.getPubKey(pubKey, { target: tapleaf });
-
-    let txData = Tx.create({
-      vin: [{
-        txid: commitTxId,
-        vout: 0,
-        prevout: {
-          value: revealFee,
-          scriptPubKey: ['OP_1', tpubkey]
-        }
-      }],
-      vout: [{
-        value: 546,
-        scriptPubKey: Address.toScriptPubKey(address)
-      }]
-    });
-
-    const sig = Signer.taproot.sign(secKey, txData, 0, { extension: tapleaf });
-    txData.vin[0].witness = [sig, script, cblock];
-    console.log(Tx.encode(txData).hex);
-    await new Promise(resolve => setTimeout(resolve, 2500));
-    return await broadcastTx(Tx.encode(txData).hex);
-  }
-
   async function broadcastTx(txHex) {
     const url = `https://mempool.space/testnet4/api/tx`;
   
@@ -460,7 +372,7 @@ function App() {
   }
 
   const getConfirmedCardinalUtxos = async(address) => {
-    // "https://ordinals.com/outputs/<address>?type=cardinal"
+    //TODO: "https://ordinals.com/outputs/<address>?type=cardinal"
     let utxos = await fetch(`https://mempool.space/testnet4/api/address/${address}/utxo`);
     let utxosJson = await utxos.json();
     console.log(utxosJson);
@@ -567,34 +479,6 @@ function App() {
     }
     explore(utxos, [], 0, 0);
     return bestSolution;
-  }
-
-
-  const createInscriptionScript = (revealPublicKey, content, mimeType) => {
-    let ec = new TextEncoder();
-    let marker = ec.encode('ord');
-
-    let contentBuffer = Buffer.from(content, 'utf8');
-    const contentChunks = [];
-    for (let i = 0; i < contentBuffer.length; i += 520) {
-      contentChunks.push(contentBuffer.subarray(i, i + 520));
-    }
-
-    const script = [revealPublicKey, 'OP_CHECKSIG'];
-    script.push('OP_0', 'OP_IF', marker, '01', ec.encode(mimeType), 'OP_0');
-    script.push(...contentChunks, 'OP_ENDIF');
-    return script;
-  }
-
-  const createDelegateScript = (revealPublicKey, delegateId, mimeType) => {
-    let ec = new TextEncoder();
-    let marker = ec.encode('ord');
-
-    const script = [revealPublicKey, 'OP_CHECKSIG'];
-    script.push('OP_0', 'OP_IF', marker, '01', ec.encode(mimeType));
-    script.push('11', getDelegateBytes(delegateId));
-    script.push('OP_ENDIF');
-    return script;
   }
 
   const getAddressType = (addressScript, publicKey) => {
