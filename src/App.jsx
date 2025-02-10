@@ -31,9 +31,10 @@ class Inscription {
     metaprotocol = null,
     //parent = null,
     delegate = null,
-    //pointer = null,
+    pointer = null,
     //metadata = null,
     //rune = null,
+    postage = 546
   }) {
     this.content = content;
     this.contentType = contentType;
@@ -41,9 +42,10 @@ class Inscription {
     this.metaprotocol = metaprotocol;
     //this.parent = parent;
     this.delegate = delegate;
-    //this.pointer = pointer;
+    this.pointer = pointer;
     //this.metadata = metadata;
     //this.rune = rune;
+    this.postage = postage;
   }
 
   getInscriptionScript() {
@@ -51,6 +53,9 @@ class Inscription {
     const script = ['OP_0', 'OP_IF', ec.encode('ord')];
     if (this.contentType !== null) {
       script.push(1, ec.encode(this.contentType));
+    }
+    if (this.pointer !== null) {
+      script.push(2, intToLeBytes(this.pointer));
     }
     if (this.contentEncoding !== null) {
       script.push(9, ec.encode(this.contentEncoding));
@@ -115,12 +120,21 @@ function App() {
   const createInscription = async () => {
     let revealPrivateKeyBuffer = await generatePrivateKey();
     let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
-    let utxos = await getConfirmedCardinalUtxos(address);
     let ec = new TextEncoder();
-    let inscriptions = [new Inscription({
-      content: ec.encode("Chancellor on the brink of second bailout for banks"),
-      contentType: "text/plain;charset=utf-8"
-    })];
+    let inscriptions = [
+      new Inscription({
+        content: ec.encode("Chancellor on the brink of second bailout for banks"),
+        contentType: "text/plain;charset=utf-8"
+      }),
+      new Inscription({
+        content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
+        contentType: "text/plain;charset=utf-8"
+      }),
+      new Inscription({
+        content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
+        contentType: "text/plain;charset=utf-8"
+      }),
+    ];
     let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, "0".repeat(64), 0);
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, address, publicKey, revealPrivateKey, estRevealVSize);
     let signedCommitHex = await unisatProvider.signPsbt(commitPsbt.toHex());
@@ -137,12 +151,16 @@ function App() {
 
   const getRevealScript = (inscriptions, revealPublicKey) => {
     let script = [revealPublicKey, 'OP_CHECKSIG'];
+    let running_postage = 0;
     for (let i = 0; i < inscriptions.length; i++) {
-      const inscription = inscriptions[i];
+      let inscription = inscriptions[i];
+      if (i>0) {
+        inscription.pointer = running_postage;
+      }
       const inscriptionScript = inscription.getInscriptionScript();
       script.push(...inscriptionScript);
+      running_postage += inscription.postage;
     }
-    console.log(script);
     return script;
   }
 
@@ -162,8 +180,8 @@ function App() {
       }
     }];
 
-    let outputs = inscriptions.map(() => ({
-      value: 546,
+    let outputs = inscriptions.map((inscription) => ({
+      value: inscription.postage,
       scriptPubKey: Address.toScriptPubKey(inscriptionReceiveAddress)
     }));
 
@@ -183,7 +201,7 @@ function App() {
 
   const getCommitTransaction = async(inscriptions, paymentAddress, paymentPublicKey, revealPrivateKey, revealVSize) => {
     let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
-    let revealScript = getRevealScript(inscriptions, revealPublicKey);
+    let revealScript = getRevealScript(inscriptions, pubKey);
     let tapleaf = Tap.encodeScript(revealScript); // sha256 hash of the script buffer in hex
     const [tRevealPublicKey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapleaf }); // tweak the public key using the tapleaf
     const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey, "testnet");
@@ -194,7 +212,8 @@ function App() {
 
     let feeRate = await getRecommendedFees();
     let estimatedCommitFeeForHeaderAndOutputs = (10.5 + 2 * 43) * feeRate; //tx header 10.5 vBytes, 2 taproot outputs 43 vBytes each - input vB handled in selection
-    let estimatedRevealFee = Math.ceil(revealVSize * feeRate + inscriptions.length * 546);
+    let total_postage = inscriptions.reduce((acc, inscription) => acc + inscription.postage, 0);
+    let estimatedRevealFee = Math.ceil(revealVSize * feeRate + total_postage);
 
     let utxos = await getConfirmedCardinalUtxos(paymentAddress);
     let adjustedUtxos = appendUtxoEffectiveValues(utxos, paymentAddressType, feeRate); //adjust utxos values to account for fee for size of input
@@ -565,11 +584,11 @@ function App() {
   const getDelegateBytes = (delegateId) => {
     const [txHash, index] = delegateId.split("i");
     const txHashBytes = Buffer.from(txHash, 'hex').reverse();
-    const indexBytes = indexToBytes(parseInt(index));
+    const indexBytes = intToLeBytes(parseInt(index));
     return Buffer.concat([txHashBytes, indexBytes]);
   }
 
-  function indexToBytes(value) {
+  function intToLeBytes(value) {
     const bytes = [];
     while (value > 0) {
       bytes.push(value & 0xff); //push smallest byte
