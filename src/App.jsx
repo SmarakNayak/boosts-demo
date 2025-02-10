@@ -23,6 +23,22 @@ async function generatePrivateKey() {
   return root?.derivePath("m/44'/0'/0'/0/0").privateKey
 }
 
+const getDelegateBytes = (delegateId) => {
+  const [txHash, index] = delegateId.split("i");
+  const txHashBytes = Buffer.from(txHash, 'hex').reverse();
+  const indexBytes = intToLeBytes(parseInt(index));
+  return Buffer.concat([txHashBytes, indexBytes]);
+}
+
+const intToLeBytes = (value) => {
+  const bytes = [];
+  while (value > 0) {
+    bytes.push(value & 0xff); //push smallest byte
+    value >>= 8; //shift right 1 byte, look at next smallest byte
+  }
+  return Buffer.from(bytes);
+}
+
 class Inscription {
   constructor({
     content = null,
@@ -201,7 +217,7 @@ function App() {
 
   const getCommitTransaction = async(inscriptions, paymentAddress, paymentPublicKey, revealPrivateKey, revealVSize) => {
     let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
-    let revealScript = getRevealScript(inscriptions, pubKey);
+    let revealScript = getRevealScript(inscriptions, revealPublicKey);
     let tapleaf = Tap.encodeScript(revealScript); // sha256 hash of the script buffer in hex
     const [tRevealPublicKey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapleaf }); // tweak the public key using the tapleaf
     const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey, "testnet");
@@ -579,22 +595,6 @@ function App() {
     script.push('11', getDelegateBytes(delegateId));
     script.push('OP_ENDIF');
     return script;
-  }
-
-  const getDelegateBytes = (delegateId) => {
-    const [txHash, index] = delegateId.split("i");
-    const txHashBytes = Buffer.from(txHash, 'hex').reverse();
-    const indexBytes = intToLeBytes(parseInt(index));
-    return Buffer.concat([txHashBytes, indexBytes]);
-  }
-
-  function intToLeBytes(value) {
-    const bytes = [];
-    while (value > 0) {
-      bytes.push(value & 0xff); //push smallest byte
-      value >>= 8; //shift right 1 byte, look at next smallest byte
-    }
-    return Buffer.from(bytes);
   }
 
   const getAddressType = (addressScript, publicKey) => {
