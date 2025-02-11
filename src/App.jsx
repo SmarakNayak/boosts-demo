@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
@@ -11,6 +11,7 @@ import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
 
+import {unisat, xverse} from './wallets'
 
 const bip32 = BIP32Factory(ecc2);
 bitcoin.initEccLib(ecc2);
@@ -101,9 +102,11 @@ class Inscription {
 }
 
 function App() {
+  const [wallet, setWallet] = useState(null);
   const [unisatProvider, setUnisatProvider] = useState(null);
   const [address, setAddress] = useState(null);
   const [publicKey, setPublicKey] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const connectUnisat = async () => {
     if (window.unisat) {
@@ -132,6 +135,28 @@ function App() {
       console.log("Unisat Wallet not found");
     }
   }
+
+  const connectWallet = (wallet) => {
+    switch (wallet) {
+      case 'unisat':
+        setWallet(unisat);
+        unisat.connect();
+        setIsModalOpen(false);
+        break;
+      case 'xverse':
+        setWallet(xverse);
+        xverse.connect();
+        setIsModalOpen(false);
+        break;
+      case 'leather':
+        //
+      case 'magiceden':
+        //
+      default:
+        console.log("Wallet not found");
+    }
+  }
+
 
   const createInscription = async () => {
     let revealPrivateKeyBuffer = await generatePrivateKey();
@@ -525,14 +550,47 @@ function App() {
 
   return (
     <> 
-      <button onClick={() => connectUnisat()}>Connect Wallet</button>
+      <button onClick={() => setIsModalOpen(true)}>Connect Wallet</button>
 
       <button onClick={() => createInscription()}>Create Inscription</button>
  
       <button onClick={()=>console.log("dc")}>Disconnect Wallet</button>
+
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+      >
+        {window.unisat ? <button onClick={() => connectWallet('unisat')}>Connect Unisat</button> : <></>}
+        {window.XverseProviders?.BitcoinProvider ? <button onClick={() => connectWallet('xverse')}>Connect Xverse</button> : <></>}
+        {window.LeatherProvider ? <button onClick={() => connectWallet('xverse')}>Connect Leather</button> : <></>}
+        {window.magicEden ? <button onClick={() => connectWallet('magiceden')}>Connect Magic Eden</button> : <></>}
+      </Modal>
+
     </>
   )
 }
+
+const Modal = ({ isOpen, onClose, children }) => {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen) {
+      dialog.showModal();
+    } else {
+      dialog.close();
+    }
+  }, [isOpen]);
+
+  return (
+    <dialog ref={dialogRef}>
+      {children}
+      <button onClick={onClose}>Close</button>
+    </dialog>
+  );
+};
 
 export default App
 
