@@ -136,17 +136,18 @@ function App() {
     }
   }
 
-  const connectWallet = (wallet) => {
+  const connectWallet = async (wallet) => {
+    let accounts = null;
     switch (wallet) {
       case 'unisat':
         setWallet(unisat);
-        unisat.connect();
-        setIsModalOpen(false);
+        accounts = await unisat.connect();
+        console.log(accounts);
         break;
       case 'xverse':
         setWallet(xverse);
-        xverse.connect();
-        setIsModalOpen(false);
+        accounts = await xverse.connect();
+        console.log(accounts);
         break;
       case 'leather':
         //
@@ -192,6 +193,45 @@ function App() {
     let commitTxId = commitTx.getId();
     console.log("Actual commit vsize", commitTx.virtualSize());
     let [revealTransaction, revealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, commitTxId, estimatedRevealFee);
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    //await new Promise(resolve => setTimeout(resolve, 2500));
+    let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
+    console.log(pushedCommitTx, pushedRevealTx);
+  }
+
+  const createInscriptionProper = async () => {
+    let revealPrivateKeyBuffer = await generatePrivateKey();
+    let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
+    let ec = new TextEncoder();
+    let inscriptions = [
+      new Inscription({
+        content: ec.encode("Chancellor on the brink of second bailout for banks"),
+        contentType: "text/plain;charset=utf-8"
+      }),
+      new Inscription({
+        content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
+        contentType: "text/plain;charset=utf-8"
+      }),
+      new Inscription({
+        content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
+        contentType: "text/plain;charset=utf-8"
+      }),
+    ];
+    // let inscriptions = Array(1000).fill().map(() => 
+    //   new Inscription({
+    //     delegate: "d386e79a0c7639805c6a63eb0d1c3e5a616c9dc8cf0dd0691e7d5440e6a175a8i2",
+    //     postage: 330,
+    //     contentType: "text/plain;charset=utf-8"
+    //   })
+    // );
+
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, "0".repeat(64), 0);
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, revealPrivateKey, estRevealVSize);
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+    console.log("Actual commit vsize", commitTx.virtualSize());
+    let [revealTransaction, revealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, commitTxId, estimatedRevealFee);
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
     //await new Promise(resolve => setTimeout(resolve, 2500));
     let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
@@ -256,7 +296,7 @@ function App() {
     const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey, "testnet");
 
     const paymentAddressScript = bitcoin.address.toOutputScript(paymentAddress, bitcoin.networks.testnet);
-    const paymentAddressType = getAddressType(paymentAddressScript);
+    const paymentAddressType = getAddressType(paymentAddressScript, paymentPublicKey);
     console.log(paymentAddressType);
 
     let feeRate = await getRecommendedFees();
@@ -306,7 +346,8 @@ function App() {
           break;
         case 'P2SH-P2WPKH':
           const p2wpkh = bitcoin.payments.p2wpkh({
-            pubkey: Buffer.from(paymentPublicKey, 'hex')
+            pubkey: Buffer.from(paymentPublicKey, 'hex'),
+            network: bitcoin.networks.testnet
           });
           psbt.addInput({
             hash: utxo.txid,
@@ -315,7 +356,7 @@ function App() {
               script: paymentAddressScript,
               value: utxo.value
             },
-            redeemScript: p2wpkh.output
+            redeemScript: p2wpkh.output,
           });
           break;
         case 'P2PKH':
@@ -340,7 +381,7 @@ function App() {
     let change = selectedUtxos.reduce((acc, utxo) => acc + utxo.value, 0) - estimatedInscriptionFee;
     if (change >= 546) {
       psbt.addOutput({
-        address: address,
+        address: paymentAddress,
         value: change
       });
     }
@@ -552,7 +593,7 @@ function App() {
     <> 
       <button onClick={() => setIsModalOpen(true)}>Connect Wallet</button>
 
-      <button onClick={() => createInscription()}>Create Inscription</button>
+      <button onClick={() => createInscriptionProper()}>Create Inscription</button>
  
       <button onClick={()=>console.log("dc")}>Disconnect Wallet</button>
 
