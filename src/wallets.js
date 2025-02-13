@@ -1,8 +1,14 @@
+//overall philosophy: we want to take as little information from the wallets as possible
+//and do the rest ourselves. If we expect too much from the wallets, we will have compatibility
+//issues with wallets that don't support the features we want. We also want to avoid
+//having to write a lot of code for each wallet, so we want to keep the code as simple as possible.
+
 import * as bitcoin from 'bitcoinjs-lib'
+import { NETWORKS, getNetworkFromAddress } from './networks'
 
 export const unisat = {
   walletType: 'unisat',
-  network: bitcoin.networks.testnet,
+  network: null,
   paymentAddress: null,
   ordinalsAddress: null,
   paymentPublicKey: null,
@@ -11,8 +17,20 @@ export const unisat = {
   windowCheck() {
     if (!window.unisat) throw new Error('Unisat not installed');
   },
-  async connect() {
+  async connect(network) {
     this.windowCheck();
+    const chain = await window.unisat.getChain();
+    if (chain.enum === NETWORKS[network].unisat) {
+      this.network = network;
+    } else {
+      try {
+        await window.unisat.switchChain(NETWORKS[network].unisat);
+        this.network = network;
+      } catch (error) {
+        throw new Error('Could not switch to the specified network');
+      }
+    }
+
     const accounts = await window.unisat.requestAccounts();
     const publicKey = await window.unisat.getPublicKey();
     this.paymentAddress = accounts[0];
@@ -47,7 +65,7 @@ export const unisat = {
 
 export const xverse = {
   walletType: 'xverse',
-  network: bitcoin.networks.testnet,
+  network: null,
   paymentAddress: null,
   ordinalsAddress: null,
   paymentPublicKey: null,
@@ -56,25 +74,30 @@ export const xverse = {
   windowCheck() {
     if (!window.XverseProviders?.BitcoinProvider) throw new Error('Xverse not installed');
   },
-  async connect() {
+  async connect(network) {
     this.windowCheck();
     const response = await window.XverseProviders.BitcoinProvider.request("wallet_connect", {
       addresses: ['payment', 'ordinals'],
       message: 'Connect to Vermilion dot place plz'
     });
     const accounts = response.result.addresses;
-    const paymentAccount = accounts.find(address => address.purpose === 'payment');
-    const ordinalsAccount = accounts.find(address => address.purpose === 'ordinals');
-    this.paymentAddress = paymentAccount.address;
-    this.ordinalsAddress = ordinalsAccount.address;
-    this.paymentPublicKey = paymentAccount.publicKey;
-    this.ordinalsPublicKey = ordinalsAccount.publicKey;
+    const paymentAddress = accounts.find(address => address.purpose === 'payment');
+    const ordinalsAddress = accounts.find(address => address.purpose === 'ordinals');
+    if (getNetworkFromAddress(paymentAddress.address) === network) {
+      this.network = network;
+    } else {
+      throw new Error('Connected to wrong network');
+    }
+    this.paymentAddress = paymentAddress.address;
+    this.ordinalsAddress = ordinalsAddress.address;
+    this.paymentPublicKey = paymentAddress.publicKey;
+    this.ordinalsPublicKey = ordinalsAddress.publicKey;
 
     return {
-      paymentAddress: paymentAccount.address,
-      ordinalsAddress: ordinalsAccount.address,
-      paymentPublicKey: paymentAccount.publicKey,
-      ordinalsPublicKey: ordinalsAccount.publicKey,
+      paymentAddress: paymentAddress.address,
+      ordinalsAddress: ordinalsAddress.address,
+      paymentPublicKey: paymentAddress.publicKey,
+      ordinalsPublicKey: ordinalsAddress.publicKey,
     };
   },
   async getNetwork() {
@@ -104,26 +127,72 @@ export const xverse = {
       } else {
         throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
       }
-      console.log(inputAddress);
       
       if (inputAddress === this.paymentAddress || inputAddress === this.ordinalsAddress) {
         inputsToSign[inputAddress].push(inputIndex);
       }
     });
-    console.log(inputsToSign);
 
     let psbtBase64= psbt.toBase64();
-    console.log(psbtBase64);
     let response = await window.XverseProviders.BitcoinProvider.request("signPsbt", {
       psbt: psbtBase64,
       signInputs: inputsToSign,
       broadcast: false
     });
     if (response.error) throw new Error(response.error.message);
-    console.log(response);
-    console.log(response.result.psbt === psbtBase64);
     let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt, { network: this.network });
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
   }
 }
+
+export const leather = {
+  walletType: 'leather',
+  network: null,
+  paymentAddress: null,
+  ordinalsAddress: null,
+  paymentPublicKey: null,
+  ordinalsPublicKey: null,
+
+  windowCheck() {
+    if (!window.LeatherProvider) throw new Error('Leather not installed');
+  },
+  async connect(network) {
+    this.windowCheck();
+    const response = await window.LeatherProvider.request('getAddresses');
+    const paymentAddress = response.result.addresses.find(address => address.type === 'p2wpkh');
+    const ordinalsAddress = response.result.addresses.find(address => address.type === 'p2tr');
+    if (getNetworkFromAddress(paymentAddress.address) === network) {
+      this.network = network;
+    } else {
+      throw new Error('Connected to wrong network');
+    }
+    this.paymentAddress = paymentAddress.address;
+    this.ordinalsAddress = ordinalsAddress.address;
+    this.paymentPublicKey = paymentAddress.publicKey;
+    this.ordinalsPublicKey = ordinalsAddress.publicKey;
+
+    return {
+      paymentAddress: paymentAddress.address,
+      ordinalsAddress: ordinalsAddress.address,
+      paymentPublicKey: paymentAddress.publicKey,
+      ordinalsPublicKey: ordinalsAddress.publicKey,
+    };
+  },
+  async getNetwork() {
+    throw new Error('Leather does not support getNetwork');
+  },
+  async switchNetwork(network) {
+    throw new Error('Leather does not support network switching');
+  },
+  async signPsbt(psbt) {
+    this.windowCheck();
+    let response = await window.LeatherProvider.request('signPsbt', { hex: psbt.toHex() });
+    if (response.error) throw new Error(response.error.message);
+    console.log(response);
+    let signedPsbt = bitcoin.Psbt.fromHex(response.result.hex);
+    let finalizedPsbt = signedPsbt.finalizeAllInputs();
+    return finalizedPsbt;
+  }
+}
+

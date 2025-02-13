@@ -11,7 +11,7 @@ import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
 
-import {unisat, xverse} from './wallets'
+import {unisat, xverse, leather} from './wallets'
 
 const bip32 = BIP32Factory(ecc2);
 bitcoin.initEccLib(ecc2);
@@ -102,55 +102,31 @@ class Inscription {
 }
 
 function App() {
+  const [network, setNetwork] = useState('testnet');
   const [wallet, setWallet] = useState(null);
   const [unisatProvider, setUnisatProvider] = useState(null);
   const [address, setAddress] = useState(null);
   const [publicKey, setPublicKey] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const connectUnisat = async () => {
-    if (window.unisat) {
-      try {
-        // Set the provider
-        setUnisatProvider(window.unisat);
-        console.log(window.unisat);
-        // Set the chain
-        let chain = await window.unisat.getChain();
-        console.log(chain);
-        if (chain.enum !== "BITCOIN_TESTNET4") {
-          window.unisat.switchChain("BITCOIN_TESTNET4");
-        }
-        // Set the address
-        let addy = await window.unisat.requestAccounts();
-        console.log(addy);
-        setAddress(addy[0]);
-        // Set the public key
-        let pubKey = await window.unisat.getPublicKey();
-        console.log(pubKey);
-        setPublicKey(pubKey);
-      } catch (error) {
-        console.error(error);
-      }
-    } else {
-      console.log("Unisat Wallet not found");
-    }
-  }
-
   const connectWallet = async (wallet) => {
     let accounts = null;
     switch (wallet) {
       case 'unisat':
+        accounts = await unisat.connect(network);        
         setWallet(unisat);
-        accounts = await unisat.connect();
         console.log(accounts);
         break;
       case 'xverse':
+        accounts = await xverse.connect(network);
         setWallet(xverse);
-        accounts = await xverse.connect();
         console.log(accounts);
         break;
       case 'leather':
-        //
+        accounts = await leather.connect(network);
+        setWallet(leather);
+        console.log(accounts);
+        break;
       case 'magiceden':
         //
       default:
@@ -603,7 +579,7 @@ function App() {
       >
         {window.unisat ? <button onClick={() => connectWallet('unisat')}>Connect Unisat</button> : <></>}
         {window.XverseProviders?.BitcoinProvider ? <button onClick={() => connectWallet('xverse')}>Connect Xverse</button> : <></>}
-        {window.LeatherProvider ? <button onClick={() => connectWallet('xverse')}>Connect Leather</button> : <></>}
+        {window.LeatherProvider ? <button onClick={() => connectWallet('leather')}>Connect Leather</button> : <></>}
         {window.magicEden ? <button onClick={() => connectWallet('magiceden')}>Connect Magic Eden</button> : <></>}
       </Modal>
 
