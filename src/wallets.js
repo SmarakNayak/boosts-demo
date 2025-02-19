@@ -196,3 +196,56 @@ export const leather = {
   }
 }
 
+export const okx = {
+  walletType: 'okx',
+  network: null,
+  paymentAddress: null,
+  ordinalsAddress: null,
+  paymentPublicKey: null,
+  ordinalsPublicKey: null,
+
+  windowCheck() {
+    if (!window.okxwallet) throw new Error('OKX not installed');
+  },
+  async connect(network) {
+    this.windowCheck();
+    let response;
+    if (network === 'mainnet') {
+      response = await window.okxwallet.bitcoin.connect();
+    } else if (network === 'testnet') {
+      response = await window.okxwallet.bitcoinTestnet.connect();
+    }
+    this.network = network;
+    this.paymentAddress = response.address;
+    this.ordinalsAddress = response.address;
+    this.paymentPublicKey = response.publicKey;
+    this.ordinalsPublicKey = response.publicKey;
+
+    return {
+      paymentAddress: response.address,
+      ordinalsAddress: response.address,
+      paymentPublicKey: response.publicKey,
+      ordinalsPublicKey: response.publicKey,
+    };
+  },
+  async getNetwork() {
+    this.windowCheck();
+    return this.network;
+  },
+  async switchNetwork(network) {
+    this.windowCheck();
+    await this.connect(network);
+  },
+  async signPsbt(psbt) {
+    this.windowCheck();
+    if (this.network === 'mainnet') {
+      let signedPsbtHex = await window.okxwallet.bitcoin.signPsbt(psbt.toHex());
+      let signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
+      return signedPsbt;
+    } else if (this.network === 'testnet') {
+      let signedPsbtHex = await window.okxwallet.bitcoinTestnet.signPsbt(psbt.toHex());
+      let signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
+      return signedPsbt;
+    }
+  }
+}

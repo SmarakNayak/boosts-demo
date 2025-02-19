@@ -11,7 +11,7 @@ import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
 
-import {unisat, xverse, leather} from './wallets'
+import {unisat, xverse, leather, okx} from './wallets'
 
 const bip32 = BIP32Factory(ecc2);
 bitcoin.initEccLib(ecc2);
@@ -125,6 +125,11 @@ function App() {
       case 'leather':
         accounts = await leather.connect(network);
         setWallet(leather);
+        console.log(accounts);
+        break;
+      case 'okx':
+        accounts = await okx.connect(network);
+        setWallet(okx);
         console.log(accounts);
         break;
       case 'magiceden':
@@ -581,6 +586,7 @@ function App() {
         {window.XverseProviders?.BitcoinProvider ? <button onClick={() => connectWallet('xverse')}>Connect Xverse</button> : <></>}
         {window.LeatherProvider ? <button onClick={() => connectWallet('leather')}>Connect Leather</button> : <></>}
         {window.magicEden ? <button onClick={() => connectWallet('magiceden')}>Connect Magic Eden</button> : <></>}
+        {window.okxwallet ? <button onClick={() => connectWallet('okx')}>Connect Okx</button> : <></>}
       </Modal>
 
     </>
