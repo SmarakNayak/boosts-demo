@@ -11,7 +11,7 @@ import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
 
-import {unisat, xverse, leather, okx, magiceden, phantom} from './wallets'
+import {unisat, xverse, leather, okx, magiceden, phantom, oyl} from './wallets'
 import { NETWORKS } from './networks'
 
 const bip32 = BIP32Factory(ecc2);
@@ -103,7 +103,7 @@ class Inscription {
 }
 
 function App() {
-  const [network, setNetwork] = useState('testnet');
+  const [network, setNetwork] = useState('mainnet');
   const [wallet, setWallet] = useState(null);
   const [unisatProvider, setUnisatProvider] = useState(null);
   const [address, setAddress] = useState(null);
@@ -141,6 +141,11 @@ function App() {
       case 'phantom':
         accounts = await phantom.connect(network);
         setWallet(phantom);
+        console.log(accounts);
+        break;
+      case 'oyl':
+        accounts = await oyl.connect(network);
+        setWallet(oyl);
         console.log(accounts);
         break;
       default:
@@ -445,8 +450,8 @@ function App() {
     }
 
     // 3. Accumulator Fallback
-    selected = [];
-    totalInput = 0;
+    let selected = [];
+    let totalInput = 0;
     for (let i = 0; i < utxos.length; i++) {
       selected.push(utxos[i]);
       totalInput += utxos[i].effectiveValue;
@@ -455,7 +460,7 @@ function App() {
       }
     }
 
-    return null;
+    throw new Error("Insufficient funds");
   }
 
   const branchAndBound = (utxos, targetAmount) => {
@@ -556,6 +561,7 @@ function App() {
         {window.magicEden ? <button onClick={() => connectWallet('magiceden')}>Connect Magic Eden</button> : <></>}
         {window.okxwallet ? <button onClick={() => connectWallet('okx')}>Connect Okx</button> : <></>}
         {window.phantom ? <button onClick={() => connectWallet('phantom')}>Connect Phantom</button> : <></>}
+        {window.oyl ? <button onClick={() => connectWallet('oyl')}>Connect Oyl</button> : <></>}
       </Modal>
 
     </>

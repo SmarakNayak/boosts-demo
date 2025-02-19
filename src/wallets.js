@@ -428,3 +428,49 @@ export const phantom = {
     return finalizedPsbt;
   }
 }
+
+export const oyl = {
+  walletType: 'oyl',
+  network: null,
+  paymentAddress: null,
+  ordinalsAddress: null,
+  paymentPublicKey: null,
+  ordinalsPublicKey: null,
+
+  windowCheck() {
+    if (!window.oyl) throw new Error('Oyl not installed');
+  },
+  async connect(network) {
+    this.windowCheck();
+    if (network !== 'mainnet') throw new Error('Oyl only supports mainnet');    
+    this.network = network;
+    let accounts = await window.oyl.getAddresses();
+    this.paymentAddress = accounts.nativeSegwit.address;
+    this.ordinalsAddress = accounts.taproot.address;
+    this.paymentPublicKey = accounts.nativeSegwit.publicKey;
+    this.ordinalsPublicKey = accounts.taproot.publicKey;
+
+    return {
+      paymentAddress: accounts.nativeSegwit.address,
+      ordinalsAddress: accounts.taproot.address,
+      paymentPublicKey: accounts.nativeSegwit.publicKey,
+      ordinalsPublicKey: accounts.taproot.publicKey,
+    };
+  },
+  async getNetwork() {
+    throw new Error('Oyl does not support getNetwork');
+  },
+  async switchNetwork(network) {
+    throw new Error('Oyl does not support network switching');
+  },
+  async signPsbt(psbt) {
+    this.windowCheck();
+    let response = await window.oyl.signPsbt({
+      psbt: psbt.toHex(),
+      broadcast: false,
+      finalize: true
+    });
+    let signedPsbt = bitcoin.Psbt.fromHex(response.psbt);
+    return signedPsbt;
+  }
+}
