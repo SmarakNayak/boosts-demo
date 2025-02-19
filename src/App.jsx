@@ -593,5 +593,6 @@ const Modal = ({ isOpen, onClose, children }) => {
 export default App
 
 //TODO: Backup Reveal Tx
+//TODO: Use taproot address where possible
 //TODO: Scan for ordinals and runes
 //TODO: Add account change listener
