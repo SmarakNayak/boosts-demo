@@ -345,3 +345,86 @@ export const magiceden = {
     return finalizedPsbt;
   }
 }
+
+export const phantom = {
+  walletType: 'phantom',
+  network: null,
+  paymentAddress: null,
+  ordinalsAddress: null,
+  paymentPublicKey: null,
+  ordinalsPublicKey: null,
+
+  windowCheck() {
+    if (!window.phantom?.bitcoin) throw new Error('Phantom not installed');
+  },
+  async connect(network) {
+    this.windowCheck();
+    if (network !== 'mainnet') throw new Error('Phantom only supports mainnet');
+    this.network = network;
+    let accounts = await window.phantom.bitcoin.requestAccounts();
+    let paymentAddress = accounts.find(address => address.purpose === 'payment');
+    let ordinalsAddress = accounts.find(address => address.purpose === 'ordinals');
+    this.paymentAddress = paymentAddress.address;
+    this.ordinalsAddress = ordinalsAddress.address;
+    this.paymentPublicKey = paymentAddress.publicKey;
+    this.ordinalsPublicKey = ordinalsAddress.publicKey;
+
+    return {
+      paymentAddress: paymentAddress.address,
+      ordinalsAddress: ordinalsAddress.address,
+      paymentPublicKey: paymentAddress.publicKey,
+      ordinalsPublicKey: ordinalsAddress.publicKey,
+    };
+  },
+  async getNetwork() {
+    this.windowCheck();
+    return this.network;
+  },
+  async switchNetwork(network) {
+    throw new Error('Phantom does not support network switching');
+  },
+  async signPsbt(psbt) {
+    this.windowCheck();
+    let inputsToSign = [
+      {
+        address: this.paymentAddress,
+        signingIndexes: []
+      },
+      {
+        address: this.ordinalsAddress,
+        signingIndexes: []
+      }
+    ];
+
+    psbt.data.inputs.forEach((input, inputIndex) => {
+      let inputAddress;
+      if (input.nonWitnessUtxo) {
+        const transaction = bitcoin.Transaction.fromBuffer(input.nonWitnessUtxo);
+        const output = transaction.outs[input.index];
+        inputAddress = bitcoin.address.fromOutputScript(
+          output.script,
+          this.network
+        );
+      } else if (input.witnessUtxo) {
+        inputAddress = bitcoin.address.fromOutputScript(
+          input.witnessUtxo.script,
+          NETWORKS[this.network].bitcoinjs
+        );
+      } else {
+        throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
+      }
+      
+      if (inputAddress === this.paymentAddress || inputAddress === this.ordinalsAddress) {
+        inputsToSign.find(input => input.address === inputAddress).signingIndexes.push(inputIndex);
+      }
+    });
+    let psbtBytes = new Uint8Array(psbt.toBuffer());
+    let signedPSBTBytes = await window.phantom.bitcoin.signPSBT(psbtBytes, {
+      inputsToSign: inputsToSign,
+      broadcast: false
+    });
+    let signedPsbt = bitcoin.Psbt.fromBuffer(Buffer.from(signedPSBTBytes));
+    let finalizedPsbt = signedPsbt.finalizeAllInputs();
+    return finalizedPsbt;
+  }
+}

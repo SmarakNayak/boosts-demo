@@ -11,16 +11,17 @@ import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
 
-import {unisat, xverse, leather, okx, magiceden} from './wallets'
+import {unisat, xverse, leather, okx, magiceden, phantom} from './wallets'
+import { NETWORKS } from './networks'
 
 const bip32 = BIP32Factory(ecc2);
 bitcoin.initEccLib(ecc2);
 
-async function generatePrivateKey() {
+async function generatePrivateKey(bitcoinjsNetwork) {
   const entropy = crypto.getRandomValues(new Uint8Array(32))
   const mnemonic = bip39.entropyToMnemonic(Buffer.from(entropy))
   const seed = await bip39.mnemonicToSeed(mnemonic)
-  const root = bip32.fromSeed(seed, bitcoin.networks.testnet)
+  const root = bip32.fromSeed(seed, bitcoinjsNetwork)
   return root?.derivePath("m/44'/0'/0'/0/0").privateKey
 }
 
@@ -137,54 +138,18 @@ function App() {
         setWallet(magiceden);
         console.log(accounts);
         break;
+      case 'phantom':
+        accounts = await phantom.connect(network);
+        setWallet(phantom);
+        console.log(accounts);
+        break;
       default:
         console.log("Wallet not found");
     }
   }
 
-
-  const createInscription = async () => {
-    let revealPrivateKeyBuffer = await generatePrivateKey();
-    let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
-    let ec = new TextEncoder();
-    // let inscriptions = [
-    //   new Inscription({
-    //     content: ec.encode("Chancellor on the brink of second bailout for banks"),
-    //     contentType: "text/plain;charset=utf-8"
-    //   }),
-    //   new Inscription({
-    //     content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
-    //     contentType: "text/plain;charset=utf-8"
-    //   }),
-    //   new Inscription({
-    //     content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
-    //     contentType: "text/plain;charset=utf-8"
-    //   }),
-    // ];
-    let inscriptions = Array(1000).fill().map(() => 
-      new Inscription({
-        delegate: "d386e79a0c7639805c6a63eb0d1c3e5a616c9dc8cf0dd0691e7d5440e6a175a8i2",
-        postage: 330,
-        contentType: "text/plain;charset=utf-8"
-      })
-    );
-
-    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, "0".repeat(64), 0);
-    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, address, publicKey, revealPrivateKey, estRevealVSize);
-    let signedCommitHex = await unisatProvider.signPsbt(commitPsbt.toHex());
-    let signedPsbt = bitcoin.Psbt.fromHex(signedCommitHex);    
-    let commitTx = signedPsbt.extractTransaction();
-    let commitTxId = commitTx.getId();
-    console.log("Actual commit vsize", commitTx.virtualSize());
-    let [revealTransaction, revealVSize] = getRevealTransaction(inscriptions, address, revealPrivateKey, commitTxId, estimatedRevealFee);
-    let pushedCommitTx = await broadcastTx(commitTx.toHex());
-    //await new Promise(resolve => setTimeout(resolve, 2500));
-    let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
-    console.log(pushedCommitTx, pushedRevealTx);
-  }
-
   const createInscriptionProper = async () => {
-    let revealPrivateKeyBuffer = await generatePrivateKey();
+    let revealPrivateKeyBuffer = await generatePrivateKey(NETWORKS[network].bitcoinjs);
     let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
     let ec = new TextEncoder();
     let inscriptions = [
@@ -277,9 +242,9 @@ function App() {
     let revealScript = getRevealScript(inscriptions, revealPublicKey);
     let tapleaf = Tap.encodeScript(revealScript); // sha256 hash of the script buffer in hex
     const [tRevealPublicKey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapleaf }); // tweak the public key using the tapleaf
-    const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey, "testnet");
+    const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey, network);
 
-    const paymentAddressScript = bitcoin.address.toOutputScript(paymentAddress, bitcoin.networks.testnet);
+    const paymentAddressScript = bitcoin.address.toOutputScript(paymentAddress, NETWORKS[network].bitcoinjs);
     const paymentAddressType = getAddressType(paymentAddressScript, paymentPublicKey);
     console.log(paymentAddressType);
 
@@ -300,7 +265,7 @@ function App() {
     console.log("Estimated reveal fee: ", estimatedRevealFee);
     let estimatedInscriptionFee = estimatedCommitFee + estimatedRevealFee;
 
-    const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+    const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs });
     
     // 1. inputs
     for (let i = 0; i < selectedUtxos.length; i++) {
@@ -331,7 +296,7 @@ function App() {
         case 'P2SH-P2WPKH':
           const p2wpkh = bitcoin.payments.p2wpkh({
             pubkey: Buffer.from(paymentPublicKey, 'hex'),
-            network: bitcoin.networks.testnet
+            network: NETWORKS[network].bitcoinjs
           });
           psbt.addInput({
             hash: utxo.txid,
@@ -375,7 +340,7 @@ function App() {
   }
 
   async function broadcastTx(txHex) {
-    const url = `https://mempool.space/testnet4/api/tx`;
+    const url = `https://mempool.space/${NETWORKS[network].mempool}api/tx`;
   
     const response = await fetch(url, {
       method: 'POST',
@@ -395,7 +360,7 @@ function App() {
   }
 
   async function submitPackage(commitHex, revealHex) {
-    const url = `https://mempool.space/testnet4/api/v1/txs/package?maxfeerate=100`;
+    const url = `https://mempool.space/${NETWORKS[network].mempool}api/v1/txs/package?maxfeerate=100`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -415,7 +380,7 @@ function App() {
   }
 
   const getRecommendedFees = async() => {
-    let fees = await fetch("https://mempool.space/testnet4/api/v1/fees/recommended");
+    let fees = await fetch(`https://mempool.space/${NETWORKS[network].mempool}api/v1/fees/recommended`);
     let feesJson = await fees.json();
     let fastestFee = feesJson.fastestFee;
     return fastestFee;
@@ -423,7 +388,7 @@ function App() {
 
   const getConfirmedCardinalUtxos = async(address) => {
     //TODO: "https://ordinals.com/outputs/<address>?type=cardinal"
-    let utxos = await fetch(`https://mempool.space/testnet4/api/address/${address}/utxo`);
+    let utxos = await fetch(`https://mempool.space/${NETWORKS[network].mempool}api/address/${address}/utxo`);
     let utxosJson = await utxos.json();
     console.log(utxosJson);
     let confirmedUtxos = utxosJson.filter(utxo => utxo.status.confirmed == true);
@@ -433,7 +398,7 @@ function App() {
   }
 
   const getTxData = async(txId) => {
-    let txData = await fetch(`https://mempool.space/testnet4/api/tx/${txId}/hex`);
+    let txData = await fetch(`https://mempool.space/${NETWORKS[network].mempool}api/tx/${txId}/hex`);
     let txDataJson = await txData.json();
     return txDataJson;
   }
@@ -545,7 +510,7 @@ function App() {
       // Parse the P2SH script (OP_HASH160 <scripthash> OP_EQUAL) to extract the witness program hash stored inside it
       const p2sh = bitcoin.payments.p2sh({
         output: addressScript,
-        network: bitcoin.networks.testnet
+        network: NETWORKS[network].bitcoinjs
       })
 
       // Create pubkeyhash from pubkey
@@ -554,7 +519,7 @@ function App() {
       // Create the witness program (OP_0 <pubkeyhash>) that would be wrapped inside P2SH for this pubkey
       const p2wpkh = bitcoin.payments.p2wpkh({
         hash: pubkeyHash,
-        network: bitcoin.networks.testnet
+        network: NETWORKS[network].bitcoinjs
       })
 
       // Check if:
@@ -590,6 +555,7 @@ function App() {
         {window.LeatherProvider ? <button onClick={() => connectWallet('leather')}>Connect Leather</button> : <></>}
         {window.magicEden ? <button onClick={() => connectWallet('magiceden')}>Connect Magic Eden</button> : <></>}
         {window.okxwallet ? <button onClick={() => connectWallet('okx')}>Connect Okx</button> : <></>}
+        {window.phantom ? <button onClick={() => connectWallet('phantom')}>Connect Phantom</button> : <></>}
       </Modal>
 
     </>
