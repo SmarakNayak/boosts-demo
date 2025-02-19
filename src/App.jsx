@@ -593,4 +593,4 @@ const Modal = ({ isOpen, onClose, children }) => {
 export default App
 
 //TODO: Backup Reveal Tx
-//TODO: Support for different wallets
+//TODO: Add account change listener
