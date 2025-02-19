@@ -4,6 +4,7 @@
 //having to write a lot of code for each wallet, so we want to keep the code as simple as possible.
 
 import * as bitcoin from 'bitcoinjs-lib'
+import * as jsontokens from 'jsontokens'
 import { NETWORKS, getNetworkFromAddress } from './networks'
 
 export const unisat = {
@@ -140,7 +141,7 @@ export const xverse = {
       broadcast: false
     });
     if (response.error) throw new Error(response.error.message);
-    let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt, { network: this.network });
+    let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt);
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
   }
@@ -247,5 +248,100 @@ export const okx = {
       let signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
       return signedPsbt;
     }
+  }
+}
+
+export const magiceden = {
+  walletType: 'magiceden',
+  network: null,
+  paymentAddress: null,
+  ordinalsAddress: null,
+  paymentPublicKey: null,
+  ordinalsPublicKey: null,
+
+  windowCheck() {
+    if (!window.magicEden.bitcoin) throw new Error('MagicEden not installed');
+  },
+  async connect(network) {
+    this.windowCheck();
+    //if (network !== 'mainnet') throw new Error('MagicEden only supports mainnet');
+    this.network = network;
+    let payload = {
+      purposes: ['payment', 'ordinals']
+    };
+    let request = jsontokens.createUnsecuredToken(payload);
+    let response = await window.magicEden.bitcoin.connect(request);
+    const accounts = response.addresses;
+    const paymentAddress = accounts.find(address => address.purpose === 'payment');
+    const ordinalsAddress = accounts.find(address => address.purpose === 'ordinals');
+    this.paymentAddress = paymentAddress.address;
+    this.ordinalsAddress = ordinalsAddress.address;
+    this.paymentPublicKey = paymentAddress.publicKey;
+    this.ordinalsPublicKey = ordinalsAddress.publicKey;
+
+    return {
+      paymentAddress: paymentAddress.address,
+      ordinalsAddress: ordinalsAddress.address,
+      paymentPublicKey: paymentAddress.publicKey,
+      ordinalsPublicKey: ordinalsAddress.publicKey,
+    };
+  },
+  async getNetwork() {
+    throw new Error('MagicEden does not support getNetwork');
+  },
+  async switchNetwork(network) {
+    throw new Error('MagicEden does not support network switching');
+  },
+  async signPsbt(psbt) {
+    this.windowCheck();
+    let inputsToSign = [
+      {
+        address: this.paymentAddress,
+        signingIndexes: []
+      },
+      {
+        address: this.ordinalsAddress,
+        signingIndexes: []
+      }
+    ];
+
+    psbt.data.inputs.forEach((input, inputIndex) => {
+      let inputAddress;
+      if (input.nonWitnessUtxo) {
+        const transaction = bitcoin.Transaction.fromBuffer(input.nonWitnessUtxo);
+        const output = transaction.outs[input.index];
+        inputAddress = bitcoin.address.fromOutputScript(
+          output.script,
+          this.network
+        );
+      } else if (input.witnessUtxo) {
+        inputAddress = bitcoin.address.fromOutputScript(
+          input.witnessUtxo.script,
+          this.network
+        );
+      } else {
+        throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
+      }
+      
+      if (inputAddress === this.paymentAddress || inputAddress === this.ordinalsAddress) {
+        inputsToSign.find(input => input.address === inputAddress).signingIndexes.push(inputIndex);
+      }
+    });
+
+    let psbtBase64= psbt.toBase64();
+    let payload = {
+      network: {
+        type: 'Mainnet',
+      },
+      psbtBase64: psbtBase64,
+      broadcast: false,
+      inputsToSign: inputsToSign
+    };
+    let request = jsontokens.createUnsecuredToken(payload);
+    let response = await window.magicEden.bitcoin.signPsbt(request);
+    if (response.error) throw new Error(response.error.message);
+    let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt);
+    let finalizedPsbt = signedPsbt.finalizeAllInputs();
+    return finalizedPsbt;
   }
 }

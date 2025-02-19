@@ -11,7 +11,7 @@ import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
 
-import {unisat, xverse, leather, okx} from './wallets'
+import {unisat, xverse, leather, okx, magiceden} from './wallets'
 
 const bip32 = BIP32Factory(ecc2);
 bitcoin.initEccLib(ecc2);
@@ -133,7 +133,10 @@ function App() {
         console.log(accounts);
         break;
       case 'magiceden':
-        //
+        accounts = await magiceden.connect(network);
+        setWallet(magiceden);
+        console.log(accounts);
+        break;
       default:
         console.log("Wallet not found");
     }
