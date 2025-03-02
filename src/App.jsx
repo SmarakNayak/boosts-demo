@@ -105,52 +105,56 @@ class Inscription {
 function App() {
   const [network, setNetwork] = useState('mainnet');
   const [wallet, setWallet] = useState(null);
-  const [unisatProvider, setUnisatProvider] = useState(null);
-  const [address, setAddress] = useState(null);
-  const [publicKey, setPublicKey] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const connectWallet = async (wallet) => {
+  const connectWallet = async (walletType) => {
     let accounts = null;
-    switch (wallet) {
-      case 'unisat':
-        accounts = await unisat.connect(network);        
-        setWallet(unisat);
-        console.log(accounts);
+    let walletInstance = null;
+    switch (walletType) {
+      case 'unisat':    
+        walletInstance = unisat;
         break;
       case 'xverse':
-        accounts = await xverse.connect(network);
-        setWallet(xverse);
-        console.log(accounts);
+        walletInstance = xverse;
         break;
       case 'leather':
-        accounts = await leather.connect(network);
-        setWallet(leather);
-        console.log(accounts);
+        walletInstance = leather;
         break;
       case 'okx':
-        accounts = await okx.connect(network);
-        setWallet(okx);
-        console.log(accounts);
+        walletInstance = okx;
         break;
       case 'magiceden':
-        accounts = await magiceden.connect(network);
-        setWallet(magiceden);
-        console.log(accounts);
+        walletInstance = magiceden;
         break;
       case 'phantom':
-        accounts = await phantom.connect(network);
-        setWallet(phantom);
-        console.log(accounts);
+        walletInstance = phantom;
         break;
       case 'oyl':
-        accounts = await oyl.connect(network);
-        setWallet(oyl);
-        console.log(accounts);
+        walletInstance = oyl;
         break;
       default:
-        console.log("Wallet not found");
+        throw new Error('Unsupported wallet type');
     }
+    accounts = await walletInstance.connect(network);
+    setWallet(walletInstance);
+    setIsConnected(true);
+    setIsModalOpen(false);
+    walletInstance.setupAccountChangeListener((accounts) => {
+      console.log(accounts);
+      if (accounts?.disconnected === true) {
+        setIsConnected(false);
+        setWallet(null);
+      } else {
+        setWallet({...walletInstance});
+      }      
+    });
+  }
+
+  const disconnectWallet = async () => {
+    await wallet.removeAccountChangeListener();
+    setWallet(null);
+    setIsConnected(false);
   }
 
   const createInscriptionProper = async () => {
@@ -392,7 +396,13 @@ function App() {
   }
 
   const getConfirmedCardinalUtxos = async(address) => {
-    //TODO: "https://ordinals.com/outputs/<address>?type=cardinal"
+    if (network === 'mainnet') {
+      let cardinalUtxos = await fetch(`https://blue.vermilion.place/ord_api/outputs/${address}?type=cardinal`);
+      console.log(cardinalUtxos);
+      //let cardinalUtxosJson = await cardinalUtxos.json();
+      //console.log(cardinalUtxosJson);
+    }
+
     let utxos = await fetch(`https://mempool.space/${NETWORKS[network].mempool}api/address/${address}/utxo`);
     let utxosJson = await utxos.json();
     console.log(utxosJson);
@@ -545,11 +555,19 @@ function App() {
 
   return (
     <> 
-      <button onClick={() => setIsModalOpen(true)}>Connect Wallet</button>
-
-      <button onClick={() => createInscriptionProper()}>Create Inscription</button>
- 
-      <button onClick={()=>console.log("dc")}>Disconnect Wallet</button>
+      {!isConnected ? (
+        <button onClick={() => setIsModalOpen(true)}>Connect Wallet</button>
+      ) : (
+        <div>
+          <div className="address-display">
+            <div><strong>Payment Address:</strong> {wallet?.paymentAddress}</div>
+            <div><strong>Ordinals Address:</strong> {wallet?.ordinalsAddress}</div>
+          </div>
+          
+          <button onClick={() => createInscriptionProper()}>Create Inscription</button>
+          <button onClick={() => disconnectWallet()}>Disconnect Wallet</button>
+        </div>
+      )}
 
       <Modal
         isOpen={isModalOpen}
@@ -595,4 +613,3 @@ export default App
 //TODO: Backup Reveal Tx
 //TODO: Use taproot address where possible
 //TODO: Scan for ordinals and runes
-//TODO: Add account change listener

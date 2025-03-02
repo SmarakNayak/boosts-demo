@@ -14,7 +14,7 @@ export const NETWORKS = {
     tapscript: 'mainnet',
     mempool: '',
     unisat: 'BITCOIN_MAINNET',
-    xverse: 'mainnet',
+    xverse: 'Mainnet',
     leather: 'mainnet'
   }
 }

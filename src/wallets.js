@@ -14,6 +14,7 @@ export const unisat = {
   ordinalsAddress: null,
   paymentPublicKey: null,
   ordinalsPublicKey: null,
+  _accountChangedListener: null,
 
   windowCheck() {
     if (!window.unisat) throw new Error('Unisat not installed');
@@ -61,6 +62,51 @@ export const unisat = {
     let signedPsbtHex = await window.unisat.signPsbt(psbtHex);
     let signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
     return signedPsbt;
+  },
+  async setupAccountChangeListener(callback) {
+    this.windowCheck();
+    this._accountChangedListener = async (accounts) => {
+      console.log('Accounts changed:', accounts);
+      // handle dc
+      if (accounts.length === 0) {
+        console.log("Wallet disconnected or empty address received");
+    
+        // Clear the wallet addresses
+        this.paymentAddress = null;
+        this.ordinalsAddress = null;
+        this.paymentPublicKey = null;
+        this.ordinalsPublicKey = null;
+        
+        // Notify the app about disconnection
+        callback({
+          paymentAddress: null,
+          ordinalsAddress: null,
+          paymentPublicKey: null,
+          ordinalsPublicKey: null,
+          disconnected: true
+        });
+        this.removeAccountChangeListener();
+        return;
+      };
+
+      // handle switch
+      const publicKey = await window.unisat.getPublicKey();
+      this.paymentAddress = accounts[0];
+      this.ordinalsAddress = accounts[0];
+      this.paymentPublicKey = publicKey;
+      this.ordinalsPublicKey = publicKey;
+      callback({
+        paymentAddress: accounts[0],
+        ordinalsAddress: accounts[0],
+        paymentPublicKey: publicKey,
+        ordinalsPublicKey: publicKey,
+      });
+    };
+    window.unisat.on('accountsChanged', this._accountChangedListener);
+  },
+  removeAccountChangeListener() {
+    this.windowCheck();
+    window.unisat.removeListener('accountsChanged', this._accountChangedListener);
   }
 }
 
@@ -84,6 +130,7 @@ export const xverse = {
     const accounts = response.result.addresses;
     const paymentAddress = accounts.find(address => address.purpose === 'payment');
     const ordinalsAddress = accounts.find(address => address.purpose === 'ordinals');
+    await this.getNetwork();
     if (getNetworkFromAddress(paymentAddress.address) === network) {
       this.network = network;
     } else {
@@ -102,7 +149,13 @@ export const xverse = {
     };
   },
   async getNetwork() {
-    throw new Error('Xverse does not support getNetwork');
+    this.windowCheck();
+    const res = await window.XverseProviders.BitcoinProvider.request('wallet_getNetwork', null);
+    if (res.status === 'error') {
+      console.error(res.error);
+      return;
+    }
+    let network = res.result.bitcoin.name;
   },
   async switchNetwork(network) {
     throw new Error('Xverse does not support network switching');
@@ -118,12 +171,12 @@ export const xverse = {
         const output = transaction.outs[input.index];
         inputAddress = bitcoin.address.fromOutputScript(
           output.script,
-          this.network
+          NETWORKS[this.network].bitcoinjs
         );
       } else if (input.witnessUtxo) {
         inputAddress = bitcoin.address.fromOutputScript(
           input.witnessUtxo.script,
-          this.network
+          NETWORKS[this.network].bitcoinjs
         );
       } else {
         throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
@@ -144,6 +197,12 @@ export const xverse = {
     let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt);
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async setupAccountChangeListener(callback) {
+    console.log('Account change listener not supported for Xverse');     
+  },
+  async removeAccountChangeListener() {
+    //No listener to remove
   }
 }
 
@@ -194,6 +253,12 @@ export const leather = {
     let signedPsbt = bitcoin.Psbt.fromHex(response.result.hex);
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async setupAccountChangeListener(callback) {
+    console.log('Account change listener not supported for Leather');     
+  },
+  async removeAccountChangeListener() {
+    //No listener to remove
   }
 }
 
@@ -204,6 +269,8 @@ export const okx = {
   ordinalsAddress: null,
   paymentPublicKey: null,
   ordinalsPublicKey: null,
+  // Store the listener functions as properties
+  _accountChangedListener: null,
 
   windowCheck() {
     if (!window.okxwallet) throw new Error('OKX not installed');
@@ -248,6 +315,66 @@ export const okx = {
       let signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
       return signedPsbt;
     }
+  },
+  async setupAccountChangeListener(callback) {
+    this.windowCheck();
+
+    this._accountChangedListener = async (addressInfo) => {
+      if (addressInfo === null) {
+        console.log("Wallet disconnected or empty address received");
+    
+        // Clear the wallet addresses
+        this.paymentAddress = null;
+        this.ordinalsAddress = null;
+        this.paymentPublicKey = null;
+        this.ordinalsPublicKey = null;
+        
+        // Notify the app about disconnection
+        callback({
+          paymentAddress: null,
+          ordinalsAddress: null,
+          paymentPublicKey: null,
+          ordinalsPublicKey: null,
+          disconnected: true
+        });
+        this.removeAccountChangeListener();
+        return;
+      };
+      // update addresses if exist
+      this.paymentAddress = addressInfo.address;
+      this.ordinalsAddress = addressInfo.address;
+      this.paymentPublicKey = addressInfo.publicKey;
+      this.ordinalsPublicKey = addressInfo.publicKey;
+      callback({
+        paymentAddress: addressInfo.address,
+        ordinalsAddress: addressInfo.address,
+        paymentPublicKey: addressInfo.publicKey,
+        ordinalsPublicKey: addressInfo.publicKey,
+      });
+    };
+
+    // Use the stored function when adding listeners
+    const provider = this.network === 'mainnet' ? 
+    window.okxwallet.bitcoin : 
+    window.okxwallet.bitcoinTestnet;      
+    provider.on('accountChanged', this._accountChangedListener);
+  },
+  removeAccountChangeListener() {
+    this.windowCheck();
+    
+    if (!this._accountChangedListener) {
+      return; // No listeners have been set up
+    }
+    
+    const provider = this.network === 'mainnet' ? 
+      window.okxwallet.bitcoin : 
+      window.okxwallet.bitcoinTestnet;
+    
+    // Use the same function references when removing listeners
+    provider.removeListener('accountChanged', this._accountChangedListener);
+    
+    // Clean up the references
+    this._accountChangedListener = null;
   }
 }
 
@@ -258,6 +385,7 @@ export const magiceden = {
   ordinalsAddress: null,
   paymentPublicKey: null,
   ordinalsPublicKey: null,
+  _accountChangedListener: null,
 
   windowCheck() {
     if (!window.magicEden.bitcoin) throw new Error('MagicEden not installed');
@@ -343,7 +471,35 @@ export const magiceden = {
     let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt);
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async setupAccountChangeListener(callback) {
+    this.windowCheck();
+    this._accountChangedListener = async (accounts) => {
+      // handle switch
+      const paymentAddress = accounts.find(address => address.purpose === 'payment');
+      const ordinalsAddress = accounts.find(address => address.purpose === 'ordinals');
+      if (this.paymentAddress === paymentAddress.address && this.ordinalsAddress === ordinalsAddress.address) {
+        return; //address hasn't changed
+      };
+      this.paymentAddress = paymentAddress.address;
+      this.ordinalsAddress = ordinalsAddress.address;
+      this.paymentPublicKey = null;
+      this.ordinalsPublicKey = null;
+      await this.connect(this.network);
+      callback({
+        paymentAddress: this.paymentAddress,
+        ordinalsAddress: this.ordinalsAddress,
+        paymentPublicKey: this.paymentPublicKey,
+        ordinalsPublicKey: this.ordinalsPublicKey,
+      });
+    };
+    window.magicEden.bitcoin.on('accountsChanged', this._accountChangedListener);
+  },
+  removeAccountChangeListener() {
+    this.windowCheck();
+    window.magicEden.bitcoin.removeListener('accountsChanged', this._accountChangedListener);
   }
+
 }
 
 export const phantom = {
@@ -353,6 +509,7 @@ export const phantom = {
   ordinalsAddress: null,
   paymentPublicKey: null,
   ordinalsPublicKey: null,
+  _accountChangedListener: null,
 
   windowCheck() {
     if (!window.phantom?.bitcoin) throw new Error('Phantom not installed');
@@ -426,6 +583,52 @@ export const phantom = {
     let signedPsbt = bitcoin.Psbt.fromBuffer(Buffer.from(signedPSBTBytes));
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async setupAccountChangeListener(callback) {
+    this.windowCheck();
+    this._accountChangedListener = async (accounts) => {
+      console.log('Accounts changed:', accounts);
+      // handle dc
+      if (accounts.length === 0) {
+        console.log("Wallet disconnected or empty address received");
+    
+        // Clear the wallet addresses
+        this.paymentAddress = null;
+        this.ordinalsAddress = null;
+        this.paymentPublicKey = null;
+        this.ordinalsPublicKey = null;
+        
+        // Notify the app about disconnection
+        callback({
+          paymentAddress: null,
+          ordinalsAddress: null,
+          paymentPublicKey: null,
+          ordinalsPublicKey: null,
+          disconnected: true
+        });
+        this.removeAccountChangeListener();
+        return;
+      };
+
+      // handle switch
+      let paymentAddress = accounts.find(address => address.purpose === 'payment');
+      let ordinalsAddress = accounts.find(address => address.purpose === 'ordinals');
+      this.paymentAddress = paymentAddress.address;
+      this.ordinalsAddress = ordinalsAddress.address;
+      this.paymentPublicKey = paymentAddress.publicKey;
+      this.ordinalsPublicKey = ordinalsAddress.publicKey;
+      callback({
+        paymentAddress: paymentAddress.address,
+        ordinalsAddress: ordinalsAddress.address,
+        paymentPublicKey: paymentAddress.publicKey,
+        ordinalsPublicKey: ordinalsAddress.publicKey,
+      });
+    };
+    window.phantom.bitcoin.on('accountsChanged', this._accountChangedListener);
+  },
+  removeAccountChangeListener() {
+    this.windowCheck();
+    window.phantom.bitcoin.removeListener('accountsChanged', this._accountChangedListener);
   }
 }
 
@@ -472,5 +675,11 @@ export const oyl = {
     });
     let signedPsbt = bitcoin.Psbt.fromHex(response.psbt);
     return signedPsbt;
+  },
+  async setupAccountChangeListener(callback) {
+    console.log('Account change listener not supported for Oyl');     
+  },
+  async removeAccountChangeListener() {
+    //No listener to remove
   }
 }
