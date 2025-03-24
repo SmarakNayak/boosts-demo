@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
 import './App.css'
 import * as ecc from '@cmdcode/crypto-utils'
-import { Address, Signer, Tap, Tx } from '@cmdcode/tapscript'
+import { Address, Signer, Tap, Tx, Script } from '@cmdcode/tapscript'
 import * as bitcoin from 'bitcoinjs-lib'
 import { isP2PKH, isP2SHScript, isP2WPKH, isP2TR } from 'bitcoinjs-lib/src/psbt/psbtutils'
 import { toXOnly } from 'bitcoinjs-lib/src/psbt/bip371'
 import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
 import { BIP32Factory } from 'bip32'
+
+import * as btc from '@scure/btc-signer';
+import * as ordinals from 'micro-ordinals';
+import { hex, utf8 } from '@scure/base';
 
 import {unisat, xverse, leather, okx, magiceden, phantom, oyl} from './wallets'
 import { NETWORKS } from './networks'
@@ -102,8 +104,92 @@ class Inscription {
   }
 }
 
+
+const getRevealScript = (inscriptions, revealPublicKey) => {
+  let script = [revealPublicKey, 'OP_CHECKSIG'];
+  let running_postage = 0;
+  for (let i = 0; i < inscriptions.length; i++) {
+    let inscription = inscriptions[i];
+    if (i>0) {
+      inscription.pointer = running_postage;
+    }
+    const inscriptionScript = inscription.getInscriptionScript();
+    script.push(...inscriptionScript);
+    running_postage += inscription.postage;
+  }
+  return script;
+}
+
+
+const hasTaproot = (wallet, network) => {
+  let paymentAddressScript = bitcoin.address.toOutputScript(wallet.paymentAddress, NETWORKS[network].bitcoinjs);
+  let ordinalsAddressScript = bitcoin.address.toOutputScript(wallet.ordinalsAddress, NETWORKS[network].bitcoinjs);
+  if (isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript)) {
+    return true;
+  }
+  return false;
+}
+
+const getTaprootPublicKey = (wallet, network) => {
+  let paymentAddressScript = bitcoin.address.toOutputScript(wallet.paymentAddress, NETWORKS[network].bitcoinjs);
+  let ordinalsAddressScript = bitcoin.address.toOutputScript(wallet.ordinalsAddress, NETWORKS[network].bitcoinjs);
+  if (isP2TR(ordinalsAddressScript)) {
+    return wallet.ordinalsPublicKey;
+  }
+  if (isP2TR(paymentAddressScript)) {
+    return wallet.paymentPublicKey;
+  }
+  throw new Error("Unsupported address type");
+}
+
+const getRevealTapscriptData = (inscriptions, revealPublicKey) => {
+  const script = getRevealScript(inscriptions, revealPublicKey);
+  const tapLeafHash = Tap.encodeScript(script); // sha256 hash of the script buffer in hex
+  const [tweakedPubkey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapLeafHash });  // tweak the public key using the tapleaf
+  return {script, tapLeafHash, tweakedPubkey, cblock};
+}
+
+const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, tapscriptData, revealPublicKey, commitTxId, revealFee, network) => {
+  const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs });
+  let commitAddress = Address.p2tr.fromPubKey(tapscriptData.tweakedPubkey, network);
+
+  psbt.addInput({
+    hash: commitTxId,
+    index: 0,
+    witnessUtxo: {
+      script: bitcoin.address.toOutputScript(commitAddress, NETWORKS[network].bitcoinjs),
+      value: revealFee,
+    },
+    tapLeafScript: [{
+      leafVersion: 192, // Tapscript leaf version (0xc0)
+      script: Buffer.from(Script.encode(tapscriptData.script)), // Serialized Tapscript
+      controlBlock: Buffer.from(tapscriptData.cblock, 'hex'), // Control block for script path
+    }],
+    tapInternalKey: toXOnly(Buffer.from(revealPublicKey, 'hex')),
+  });
+ 
+  psbt.addOutputs(inscriptions.map((inscription) => ({
+    address: inscriptionReceiveAddress,
+    value: inscription.postage,
+  })));
+
+  return psbt;
+}
+
+const getMicroRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPublicKey, commitTxId, revealFee, network) => {
+  const inscription = {
+    tags: {
+      contentType: 'application/json', // can be any format (MIME type)
+      // ContentEncoding: 'br', // compression: only brotli supported
+    },
+    body: utf8.decode(JSON.stringify({ some: 1, test: 2, inscription: true, in: 'json' })),
+    // One can use previously inscribed js scripts in html
+    // utf8.decode(`<html><head></head><body><script src="/content/script_inscription_id"></script>test</html>`)
+  };
+}
+
 function App() {
-  const [network, setNetwork] = useState('mainnet');
+  const [network, setNetwork] = useState('testnet');
   const [wallet, setWallet] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -157,24 +243,28 @@ function App() {
     setIsConnected(false);
   }
 
-  const createInscriptionProper = async () => {
-    let revealPrivateKeyBuffer = await generatePrivateKey(NETWORKS[network].bitcoinjs);
-    let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
+  const createInscriptions = async () => {
     let ec = new TextEncoder();
     let inscriptions = [
       new Inscription({
         content: ec.encode("Chancellor on the brink of second bailout for banks"),
-        contentType: "text/plain;charset=utf-8"
-      }),
-      new Inscription({
-        content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
-        contentType: "text/plain;charset=utf-8"
-      }),
-      new Inscription({
-        content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
-        contentType: "text/plain;charset=utf-8"
+        contentType: "text/plain"
       }),
     ];
+    // let inscriptions = [
+    //   new Inscription({
+    //     content: ec.encode("Chancellor on the brink of second bailout for banks"),
+    //     contentType: "text/plain;charset=utf-8"
+    //   }),
+    //   new Inscription({
+    //     content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
+    //     contentType: "text/plain;charset=utf-8"
+    //   }),
+    //   new Inscription({
+    //     content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
+    //     contentType: "text/plain;charset=utf-8"
+    //   }),
+    // ];
     // let inscriptions = Array(1000).fill().map(() => 
     //   new Inscription({
     //     delegate: "d386e79a0c7639805c6a63eb0d1c3e5a616c9dc8cf0dd0691e7d5440e6a175a8i2",
@@ -182,33 +272,69 @@ function App() {
     //     contentType: "text/plain;charset=utf-8"
     //   })
     // );
+    createInscriptionsWithTempTaproot(inscriptions);
+    // if (hasTaproot(wallet, network)) {
+    //   createInscriptionsWithWalletTaproot(inscriptions);
+    // } else {
+    //   createInscriptionsWithTempTaproot(inscriptions);
+    // }
+  }
 
-    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, "0".repeat(64), 0);
+  const createInscriptionsWithWalletTaproot = async (inscriptions) => {
+    // create dummy tx to get reveal vsize
+    let dummyPrivateKey = Buffer.from(await generatePrivateKey(NETWORKS[network].bitcoinjs)).toString('hex');
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);    
+    console.log("Estimated reveal vsize", estRevealVSize);
+
+    // get unsigned reveal transaction
+    let revealPublicKey = getTaprootPublicKey(wallet, network);
+    let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
+    // get & sign commit transaction
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
+    let tempCommitTx = commitPsbt.__CACHE.__TX;
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt);
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+    console.log("Actual commit vsize", commitTx.virtualSize());
+    // get and sign reveal transaction
+    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTxId, estimatedRevealFee, network);
+    console.log(unsignedRevealPsbt.toBase64());
+    let signedRevealPsbt = await window.unisat.signPsbt(unsignedRevealPsbt.toHex(), {
+      autoFinalized: true,
+      toSignInputs: [{
+        index: 0,
+        publicKey: wallet.ordinalsPublicKey,
+        //tapLeafHash: tapscriptData.tapLeafHash,
+      }]
+    });
+    //let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt);
+    let revealTx = bitcoin.Psbt.fromHex(signedRevealPsbt).extractTransaction();
+    let revealTxHex = revealTx.toHex();
+    console.log("Reveal TX",revealTxHex);
+    console.log(Buffer.from(revealTxHex, 'hex').toString('base64'));
+    // let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    // let pushedRevealTx = await broadcastTx(revealTx.toHex());
+    // console.log(pushedCommitTx, pushedRevealTx);
+  }
+
+  const createInscriptionsWithTempTaproot = async (inscriptions) => {
+    let revealPrivateKeyBuffer = await generatePrivateKey(NETWORKS[network].bitcoinjs);
+    let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
+    let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
+
+    let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData.tweakedPubkey, "0".repeat(64), 0);
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, revealPrivateKey, estRevealVSize);
     let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
     let commitTx = signedCommitPsbt.extractTransaction();
     let commitTxId = commitTx.getId();
     console.log("Actual commit vsize", commitTx.virtualSize());
     let [revealTransaction, revealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, commitTxId, estimatedRevealFee);
-    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    console.log(Tx.encode(revealTransaction).hex);
+    //let pushedCommitTx = await broadcastTx(commitTx.toHex());
     //await new Promise(resolve => setTimeout(resolve, 2500));
-    let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
+    //let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
     console.log(pushedCommitTx, pushedRevealTx);
-  }
-
-  const getRevealScript = (inscriptions, revealPublicKey) => {
-    let script = [revealPublicKey, 'OP_CHECKSIG'];
-    let running_postage = 0;
-    for (let i = 0; i < inscriptions.length; i++) {
-      let inscription = inscriptions[i];
-      if (i>0) {
-        inscription.pointer = running_postage;
-      }
-      const inscriptionScript = inscription.getInscriptionScript();
-      script.push(...inscriptionScript);
-      running_postage += inscription.postage;
-    }
-    return script;
   }
 
   const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId, revealFee) => {
@@ -246,12 +372,8 @@ function App() {
     return [txData, vSize];
   }
 
-  const getCommitTransaction = async(inscriptions, paymentAddress, paymentPublicKey, revealPrivateKey, revealVSize) => {
-    let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
-    let revealScript = getRevealScript(inscriptions, revealPublicKey);
-    let tapleaf = Tap.encodeScript(revealScript); // sha256 hash of the script buffer in hex
-    const [tRevealPublicKey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapleaf }); // tweak the public key using the tapleaf
-    const commitAddress = Address.p2tr.fromPubKey(tRevealPublicKey, network);
+  const getCommitTransaction = async(inscriptions, paymentAddress, paymentPublicKey, tweakedRevealPublicKey, revealVSize) => {
+    const commitAddress = Address.p2tr.fromPubKey(tweakedRevealPublicKey, network);
 
     const paymentAddressScript = bitcoin.address.toOutputScript(paymentAddress, NETWORKS[network].bitcoinjs);
     const paymentAddressType = getAddressType(paymentAddressScript, paymentPublicKey);
@@ -396,20 +518,28 @@ function App() {
   }
 
   const getConfirmedCardinalUtxos = async(address) => {
-    if (network === 'mainnet') {
-      let cardinalUtxos = await fetch(`https://blue.vermilion.place/ord_api/outputs/${address}?type=cardinal`);
-      console.log(cardinalUtxos);
-      //let cardinalUtxosJson = await cardinalUtxos.json();
-      //console.log(cardinalUtxosJson);
-    }
-
     let utxos = await fetch(`https://mempool.space/${NETWORKS[network].mempool}api/address/${address}/utxo`);
     let utxosJson = await utxos.json();
-    console.log(utxosJson);
     let confirmedUtxos = utxosJson.filter(utxo => utxo.status.confirmed == true);
     confirmedUtxos = confirmedUtxos.filter(utxo => utxo.value > 1000);
-    console.log(confirmedUtxos);
-    return confirmedUtxos;
+
+    let confirmedCardinalUtxos = [];
+    if (network === 'mainnet') {
+      let cardinalUtxos = await fetch(`https://blue.vermilion.place/ord_api/outputs/${address}?type=cardinal`, {
+        headers: {
+          'Accept': 'application/json',
+        }
+      });
+      let cardinalUtxosJson = await cardinalUtxos.json();
+      // filter confirmed utxos that are not in the cardinal list
+      confirmedCardinalUtxos = confirmedUtxos.filter(utxo => 
+        cardinalUtxosJson.some(cardinalUtxo => cardinalUtxo.outpoint === `${utxo.txid}:${utxo.vout}`)
+      )
+    } else {//testnet
+      confirmedCardinalUtxos = confirmedUtxos; 
+    }
+
+    return confirmedCardinalUtxos;
   }
 
   const getTxData = async(txId) => {
@@ -564,7 +694,7 @@ function App() {
             <div><strong>Ordinals Address:</strong> {wallet?.ordinalsAddress}</div>
           </div>
           
-          <button onClick={() => createInscriptionProper()}>Create Inscription</button>
+          <button onClick={() => createInscriptions()}>Create Inscription</button>
           <button onClick={() => disconnectWallet()}>Disconnect Wallet</button>
         </div>
       )}
@@ -612,4 +742,3 @@ export default App
 
 //TODO: Backup Reveal Tx
 //TODO: Use taproot address where possible
-//TODO: Scan for ordinals and runes
