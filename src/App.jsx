@@ -146,12 +146,14 @@ const getRevealTapscriptData = (inscriptions, revealPublicKey) => {
   const script = getRevealScript(inscriptions, revealPublicKey);
   const tapLeafHash = Tap.encodeScript(script); // sha256 hash of the script buffer in hex
   const [tweakedPubkey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapLeafHash });  // tweak the public key using the tapleaf
+  console.log("Tweaked Address", Address.p2tr.fromPubKey(tweakedPubkey, 'testnet'));
   return {script, tapLeafHash, tweakedPubkey, cblock};
 }
 
 const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, tapscriptData, revealPublicKey, commitTxId, revealFee, network) => {
   const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs });
   let commitAddress = Address.p2tr.fromPubKey(tapscriptData.tweakedPubkey, network);
+  console.log("Commit Address", commitAddress);
 
   psbt.addInput({
     hash: commitTxId,
@@ -174,18 +176,6 @@ const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, t
   })));
 
   return psbt;
-}
-
-const getMicroRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPublicKey, commitTxId, revealFee, network) => {
-  const inscription = {
-    tags: {
-      contentType: 'application/json', // can be any format (MIME type)
-      // ContentEncoding: 'br', // compression: only brotli supported
-    },
-    body: utf8.decode(JSON.stringify({ some: 1, test: 2, inscription: true, in: 'json' })),
-    // One can use previously inscribed js scripts in html
-    // utf8.decode(`<html><head></head><body><script src="/content/script_inscription_id"></script>test</html>`)
-  };
 }
 
 function App() {
@@ -272,12 +262,12 @@ function App() {
     //     contentType: "text/plain;charset=utf-8"
     //   })
     // );
-    createInscriptionsWithTempTaproot(inscriptions);
-    // if (hasTaproot(wallet, network)) {
-    //   createInscriptionsWithWalletTaproot(inscriptions);
-    // } else {
-    //   createInscriptionsWithTempTaproot(inscriptions);
-    // }
+    
+    if (hasTaproot(wallet, network)) {
+      createInscriptionsWithWalletTaproot(inscriptions);
+    } else {
+      createInscriptionsWithTempTaproot(inscriptions);
+    }
   }
 
   const createInscriptionsWithWalletTaproot = async (inscriptions) => {
@@ -303,13 +293,13 @@ function App() {
       autoFinalized: true,
       toSignInputs: [{
         index: 0,
-        publicKey: wallet.ordinalsPublicKey,
+        address: wallet.ordinalsAddress,
         //tapLeafHash: tapscriptData.tapLeafHash,
       }]
     });
-    //let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt);
     let revealTx = bitcoin.Psbt.fromHex(signedRevealPsbt).extractTransaction();
     let revealTxHex = revealTx.toHex();
+    console.log("Reveal TX", commitTx.toHex());
     console.log("Reveal TX",revealTxHex);
     console.log(Buffer.from(revealTxHex, 'hex').toString('base64'));
     // let pushedCommitTx = await broadcastTx(commitTx.toHex());
