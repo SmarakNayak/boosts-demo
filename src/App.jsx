@@ -323,17 +323,17 @@ function App() {
     let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
 
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
-    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData.tweakedPubkey, "0".repeat(64), 0);
-    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, revealPrivateKey, estRevealVSize);
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, "0".repeat(64), 0);
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
     let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
     let commitTx = signedCommitPsbt.extractTransaction();
     let commitTxId = commitTx.getId();
     console.log("Actual commit vsize", commitTx.virtualSize());
     let [revealTransaction, revealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, commitTxId, estimatedRevealFee);
     console.log(Tx.encode(revealTransaction).hex);
-    //let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
     //await new Promise(resolve => setTimeout(resolve, 2500));
-    //let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
+    let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
     console.log(pushedCommitTx, pushedRevealTx);
   }
 
