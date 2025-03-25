@@ -5,8 +5,10 @@ import { Address, Signer, Tap, Tx, Script } from '@cmdcode/tapscript'
 import * as bitcoin from 'bitcoinjs-lib'
 import { isP2PKH, isP2SHScript, isP2WPKH, isP2TR } from 'bitcoinjs-lib/src/psbt/psbtutils'
 import { toXOnly } from 'bitcoinjs-lib/src/psbt/bip371'
+import { ECPairFactory } from 'ecpair'
 import * as bip39 from 'bip39'
 import * as ecc2 from '@bitcoinerlab/secp256k1'
+import * as tinyecc from 'tiny-secp256k1'
 import { BIP32Factory } from 'bip32'
 
 import * as btc from '@scure/btc-signer';
@@ -15,16 +17,40 @@ import { hex, utf8 } from '@scure/base';
 
 import {unisat, xverse, leather, okx, magiceden, phantom, oyl} from './wallets'
 import { NETWORKS } from './networks'
+import { tapLeafHash } from '@scure/btc-signer/payment'
 
 const bip32 = BIP32Factory(ecc2);
-bitcoin.initEccLib(ecc2);
+bitcoin.initEccLib(tinyecc);
+const ECPair = ECPairFactory(tinyecc);
 
 async function generatePrivateKey(bitcoinjsNetwork) {
-  const entropy = crypto.getRandomValues(new Uint8Array(32))
-  const mnemonic = bip39.entropyToMnemonic(Buffer.from(entropy))
-  const seed = await bip39.mnemonicToSeed(mnemonic)
-  const root = bip32.fromSeed(seed, bitcoinjsNetwork)
-  return root?.derivePath("m/44'/0'/0'/0/0").privateKey
+  const entropy = crypto.getRandomValues(new Uint8Array(32));
+  const mnemonic = bip39.entropyToMnemonic(Buffer.from(entropy));
+  const seed = await bip39.mnemonicToSeed(mnemonic);
+  const root = bip32.fromSeed(seed, bitcoinjsNetwork);
+  const keypair = root.derivePath("m/44'/0'/0'/0/0");
+  return keypair.privateKey;
+}
+
+function wrapECPairWithBufferPublicKey(ecpair) {
+  return {
+      publicKey: Buffer.from(ecpair.publicKey),
+      compressed: ecpair.compressed,
+      network: ecpair.network,
+      lowR: ecpair.lowR,
+      privateKey: ecpair.privateKey ? Buffer.from(ecpair.privateKey) : undefined,
+      sign: ecpair.sign.bind(ecpair),
+      toWIF: ecpair.toWIF.bind(ecpair),
+      tweak: ecpair.tweak.bind(ecpair),
+      verify: ecpair.verify.bind(ecpair),
+      verifySchnorr: ecpair.verifySchnorr.bind(ecpair),
+      signSchnorr: ecpair.signSchnorr.bind(ecpair),
+  };
+}
+
+function generateKeyPair(bitcoinjsNetwork) {
+  const keypair = ECPair.makeRandom({ network: bitcoinjsNetwork });
+  return wrapECPairWithBufferPublicKey(keypair);
 }
 
 const getDelegateBytes = (delegateId) => {
@@ -325,6 +351,34 @@ function App() {
     //await new Promise(resolve => setTimeout(resolve, 2500));
     let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
     console.log(pushedCommitTx, pushedRevealTx);
+  }
+
+  const createTestInscriptions = async () => {
+    console.log(Buffer.isBuffer(Buffer.from([1,2,3]).subarray(0,2)));
+    let ec = new TextEncoder();
+    let inscriptions = [
+      new Inscription({
+        content: ec.encode("Chancellor on the brink of second bailout for banks"),
+        contentType: "text/plain"
+      }),
+    ];
+    let keypair = generateKeyPair(NETWORKS[network].bitcoinjs);
+    let revealPrivateKeyBuffer = keypair.privateKey;
+    let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
+    let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
+
+    let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, "0".repeat(64), 0);
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTxId, estimatedRevealFee, network);
+    console.log("revealPublicKey",revealPublicKey);
+    console.log("tweakedpubkey",Buffer.from(tapscriptData.tweakedPubkey,"hex"));
+    console.log("tapinternalkey: ", Buffer.isBuffer(unsignedRevealPsbt.data.inputs[0].tapInternalKey));
+    let signedRevealPsbt = unsignedRevealPsbt.signTaprootInput(0, keypair);
+    console.log("bitcoinjs: ", signedRevealPsbt.toBase64());
   }
 
   const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId, revealFee) => {
@@ -686,6 +740,7 @@ function App() {
           
           <button onClick={() => createInscriptions()}>Create Inscription</button>
           <button onClick={() => disconnectWallet()}>Disconnect Wallet</button>
+          <button onClick={() => createTestInscriptions()}>Create Test Inscription</button>
         </div>
       )}
 
