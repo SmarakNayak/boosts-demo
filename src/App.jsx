@@ -172,7 +172,7 @@ const getRevealTapscriptData = (inscriptions, revealPublicKey) => {
   const script = getRevealScript(inscriptions, revealPublicKey);
   const tapLeafHash = Tap.encodeScript(script); // sha256 hash of the script buffer in hex
   const [tweakedPubkey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapLeafHash });  // tweak the public key using the tapleaf
-  console.log("Tweaked Address", Address.p2tr.fromPubKey(tweakedPubkey, 'testnet'));
+  //console.log("Tweaked Address", Address.p2tr.fromPubKey(tweakedPubkey, 'testnet'));
   return {script, tapLeafHash, tweakedPubkey, cblock};
 }
 
@@ -306,6 +306,14 @@ function App() {
 
     // get unsigned reveal transaction
     let revealPublicKey = getTaprootPublicKey(wallet, network);
+    revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    console.log("unisat pubkey: ", Buffer.from(revealPublicKey, "hex"));
+    console.log("unisat derived address: ", Address.p2tr.fromPubKey(Buffer.from(revealPublicKey, 'hex'), network));
+    let tweakedUnisatPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    console.log("unisat tweaked pubkey: ", tweakedUnisatPublicKey);
+    console.log("unisat tweaked address: ", Address.p2tr.fromPubKey(tweakedUnisatPublicKey, network));
+    console.log("unisat address: ", wallet.ordinalsAddress);
+    
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
     // get & sign commit transaction
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
@@ -318,7 +326,7 @@ function App() {
     });
     // get and sign reveal transaction
     let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, tempCommitTx.getId(), estimatedRevealFee, network);
-    console.log("1");
+    console.log("reveal psbt:", unsignedRevealPsbt.toBase64());
     let [signedCommitPsbt, signedRevealPsbt] = await window.unisat.signPsbts(
       [commitPsbt.toHex(), unsignedRevealPsbt.toHex()],
       [
