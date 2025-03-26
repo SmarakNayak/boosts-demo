@@ -310,29 +310,40 @@ function App() {
     // get & sign commit transaction
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
     let tempCommitTx = commitPsbt.__CACHE.__TX;
-    let signedCommitPsbt = await wallet.signPsbt(commitPsbt);
-    let commitTx = signedCommitPsbt.extractTransaction();
-    let commitTxId = commitTx.getId();
-    console.log("Actual commit vsize", commitTx.virtualSize());
-    // get and sign reveal transaction
-    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTxId, estimatedRevealFee, network);
-    console.log(unsignedRevealPsbt.toBase64());
-    let signedRevealPsbt = await window.unisat.signPsbt(unsignedRevealPsbt.toHex(), {
-      autoFinalized: true,
-      toSignInputs: [{
-        index: 0,
-        address: wallet.ordinalsAddress,
-        //tapLeafHash: tapscriptData.tapLeafHash,
-      }]
+    let toSignCommitInputs = commitPsbt.data.inputs.map((input, index) => {
+      return {
+        index,
+        address: wallet.paymentAddress
+      }
     });
-    let revealTx = bitcoin.Psbt.fromHex(signedRevealPsbt).extractTransaction();
-    let revealTxHex = revealTx.toHex();
-    console.log("Reveal TX", commitTx.toHex());
-    console.log("Reveal TX",revealTxHex);
-    console.log(Buffer.from(revealTxHex, 'hex').toString('base64'));
+    // get and sign reveal transaction
+    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, tempCommitTx.getId(), estimatedRevealFee, network);
+    console.log("1");
+    let [signedCommitPsbt, signedRevealPsbt] = await window.unisat.signPsbts(
+      [commitPsbt.toHex(), unsignedRevealPsbt.toHex()],
+      [
+        { autoFinalized: false, toSignInputs: toSignCommitInputs },
+        { autoFinalized: false, toSignInputs: [{ index: 0, address: wallet.ordinalsAddress }] }
+      ]
+    );
+    console.log("2");
+    // let signedRevealPsbt = await window.unisat.signPsbt(unsignedRevealPsbt.toHex(), {
+    //   autoFinalized: true,
+    //   toSignInputs: [{
+    //     index: 0,
+    //     address: wallet.ordinalsAddress,
+    //   }]
+    // });
+    let commitTx = bitcoin.Psbt.fromHex(signedCommitPsbt).finalizeAllInputs().extractTransaction();
+    let revealTx = bitcoin.Psbt.fromHex(signedRevealPsbt).finalizeAllInputs().extractTransaction();
+    console.log("4");
+    console.log("Actual commit vsize", commitTx.virtualSize());
+    console.log("Actual reveal vsize", revealTx.virtualSize());
+    console.log("Commit tx: ", commitTx.toHex());
+    console.log("Reveal tx: ", revealTx.toHex());
     // let pushedCommitTx = await broadcastTx(commitTx.toHex());
     // let pushedRevealTx = await broadcastTx(revealTx.toHex());
-    // console.log(pushedCommitTx, pushedRevealTx);
+    console.log(pushedCommitTx, pushedRevealTx);
   }
 
   const createInscriptionsWithTempTaproot = async (inscriptions) => {
@@ -581,6 +592,9 @@ function App() {
     let utxosJson = await utxos.json();
     let confirmedUtxos = utxosJson.filter(utxo => utxo.status.confirmed == true);
     confirmedUtxos = confirmedUtxos.filter(utxo => utxo.value > 1000);
+    if (network === 'testnet') {// allow unconfirmed utxos on testnet
+      confirmedUtxos = utxosJson.filter(utxo => utxo.value > 1000);
+    }
 
     let confirmedCardinalUtxos = [];
     if (network === 'mainnet') {
