@@ -181,6 +181,8 @@ const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, t
   let commitAddress = Address.p2tr.fromPubKey(tapscriptData.tweakedPubkey, network);
   console.log("Commit Address", commitAddress);
 
+  console.log(Script.encode(tapscriptData.script).hex);
+
   psbt.addInput({
     hash: commitTxId,
     index: 0,
@@ -190,7 +192,7 @@ const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, t
     },
     tapLeafScript: [{
       leafVersion: 192, // Tapscript leaf version (0xc0)
-      script: Buffer.from(Script.encode(tapscriptData.script)), // Serialized Tapscript
+      script: Buffer.from(Script.encode(tapscriptData.script, false)), // Serialized Tapscript
       controlBlock: Buffer.from(tapscriptData.cblock, 'hex'), // Control block for script path
     }],
     tapInternalKey: toXOnly(Buffer.from(revealPublicKey, 'hex')),
@@ -366,19 +368,26 @@ function App() {
     let revealPrivateKeyBuffer = keypair.privateKey;
     let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
     let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
+    console.log("Top level Reveal pubkey: ", revealPublicKey.hex);
+    console.log("Top level Reveal pubkey bitcoinjs: ", keypair.publicKey.toString('hex'));
 
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
     let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, "0".repeat(64), 0);
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
     let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
     let commitTx = signedCommitPsbt.extractTransaction();
+    console.log("Commit tx: ", commitTx.toHex());
     let commitTxId = commitTx.getId();
-    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTxId, estimatedRevealFee, network);
-    console.log("revealPublicKey",revealPublicKey);
-    console.log("tweakedpubkey",Buffer.from(tapscriptData.tweakedPubkey,"hex"));
-    console.log("tapinternalkey: ", Buffer.isBuffer(unsignedRevealPsbt.data.inputs[0].tapInternalKey));
+    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTxId, estimatedRevealFee, network, true);
+
     let signedRevealPsbt = unsignedRevealPsbt.signTaprootInput(0, keypair);
-    console.log("bitcoinjs: ", signedRevealPsbt.toBase64());
+    let finalizedPsbt = signedRevealPsbt.finalizeAllInputs();
+    let signedTX = finalizedPsbt.extractTransaction();
+    console.log("bitcoinjs witness: ", signedTX.ins[0].witness.map(w => w.toString('hex')));
+    console.log("bitcoinjs tx: ", signedTX.toHex());
+
+    let [cmdReveal, revealSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealPrivateKey, commitTxId, estimatedRevealFee);
+    console.log("cmdReveal tx: ", Tx.encode(cmdReveal).hex);
   }
 
   const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealPrivateKey, commitTxId, revealFee) => {
@@ -387,6 +396,8 @@ function App() {
     const script = getRevealScript(inscriptions, pubKey);
     const tapleaf = Tap.encodeScript(script);
     const [tpubkey, cblock] = Tap.getPubKey(pubKey, { target: tapleaf });
+    console.log("Reveal pubkey: ", pubKey.hex);
+    console.log("Reveal tpubkey: ", tpubkey);
 
     let inputs = [{
       txid: commitTxId,
@@ -409,6 +420,10 @@ function App() {
 
     const sig = Signer.taproot.sign(secKey, txData, 0, { extension: tapleaf });
     txData.vin[0].witness = [sig, script, cblock];
+    console.log("CMD Reveal TX witness: ");
+    console.log(sig.hex, Script.encode(script, false).hex, cblock);
+    console.log("CMD scriptpubkey: ", Tx.util.readScriptPubKey(['OP_1', tpubkey]).data.hex);
+    console.log("CMD Verifying sig: ", Signer.taproot.verify(txData, 0, { extension: tapleaf, pubkey: pubKey }));
 
     let sizeData = Tx.util.getTxSize(txData);
     let vSize = sizeData.vsize;
