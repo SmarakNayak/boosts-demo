@@ -6,6 +6,7 @@
 import * as bitcoin from 'bitcoinjs-lib'
 import * as jsontokens from 'jsontokens'
 import { NETWORKS, getNetworkFromAddress } from './networks'
+import { sign } from 'crypto';
 
 export const unisat = {
   walletType: 'unisat',
@@ -62,6 +63,19 @@ export const unisat = {
     let signedPsbtHex = await window.unisat.signPsbt(psbtHex);
     let signedPsbt = bitcoin.Psbt.fromHex(signedPsbtHex);
     return signedPsbt;
+  },
+  async signPsbts(psbtArray, signingIndexesArray) {
+    this.windowCheck();
+    let psbtHexs = psbtArray.map(psbt => psbt.toHex());
+    let unisatOptions = signingIndexesArray.map(signingIndexes => {
+      return {
+        toSignInputs: signingIndexes,
+        autoFinalized: true
+      }
+    });
+    let signedPsbtHexs = await window.unisat.signPsbts(psbtHexs, unisatOptions);
+    let signedPsbts = signedPsbtHexs.map(hex => bitcoin.Psbt.fromHex(hex));
+    return signedPsbts;
   },
   async setupAccountChangeListener(callback) {
     this.windowCheck();
@@ -197,6 +211,51 @@ export const xverse = {
     let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt);
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async signPsbts(psbtArray, signingIndexesArray) {
+    this.windowCheck();
+    let base64Psbts = psbtArray.map(psbt => psbt.toBase64());
+    let xverseobject = [];
+    for (let i = 0; i < psbtArray.length; i++) {
+      let inputsToSign = { [this.ordinalsAddress]: [], [this.paymentAddress]: [] };
+      signingIndexesArray[i].forEach(signingIndex => {
+        if (signingIndex.address === this.paymentAddress) {
+          inputsToSign[this.paymentAddress].push(signingIndex.index);
+        }
+        if (signingIndex.address === this.ordinalsAddress) {
+          inputsToSign[this.ordinalsAddress].push(signingIndex.index);
+        }
+      });
+      let entry = {
+        psbtBase64: base64Psbts[i],
+        inputsToSign,
+        broadcast: false
+      }
+      xverseobject.push(entry);
+    }
+    let response = await window.XverseProviders.BitcoinProvider.request("signMultipleTransactions", {
+      payload: {
+        network: {
+          type: NETWORKS[this.network].xverse
+        },
+        message: "Sign these transactions plz",
+        psbts: xverseobject
+      }
+    });
+    console.log(response);
+    if (response.error) {
+      if (response.error.message.includes('is not supported')) {
+        console.log('Xverse does not support signMultipleTransactions, trying one at a time');
+        let signedPsbts = [];
+        for (const [index, psbt] of psbtArray.entries()) {
+          let signedPsbt = await this.signPsbt(psbt);
+          signedPsbts[index] = signedPsbt;
+        }
+        return signedPsbts;
+      } else {
+        throw new Error(response.error);
+      }
+    }
   },
   async setupAccountChangeListener(callback) {
     console.log('Account change listener not supported for Xverse');     

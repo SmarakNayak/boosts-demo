@@ -306,7 +306,7 @@ function App() {
 
     // get unsigned reveal transaction
     let revealPublicKey = getTaprootPublicKey(wallet, network);
-    revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    //revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
     console.log("unisat pubkey: ", Buffer.from(revealPublicKey, "hex"));
     console.log("unisat derived address: ", Address.p2tr.fromPubKey(Buffer.from(revealPublicKey, 'hex'), network));
     let tweakedUnisatPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
@@ -327,28 +327,17 @@ function App() {
     // get and sign reveal transaction
     let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, tempCommitTx.getId(), estimatedRevealFee, network);
     console.log("reveal psbt:", unsignedRevealPsbt.toBase64());
-    let [signedCommitPsbt, signedRevealPsbt] = await window.unisat.signPsbts(
-      [commitPsbt.toHex(), unsignedRevealPsbt.toHex()],
+    let [signedCommitPsbt, signedRevealPsbt] = await wallet.signPsbts(
+      [commitPsbt, unsignedRevealPsbt],
       [
-        { autoFinalized: false, toSignInputs: toSignCommitInputs },
-        { autoFinalized: false, toSignInputs: [{ index: 0, address: wallet.ordinalsAddress }] }
+        toSignCommitInputs,
+        [{ index: 0, address: wallet.ordinalsAddress }]
       ]
     );
-    console.log("2");
-    // let signedRevealPsbt = await window.unisat.signPsbt(unsignedRevealPsbt.toHex(), {
-    //   autoFinalized: true,
-    //   toSignInputs: [{
-    //     index: 0,
-    //     address: wallet.ordinalsAddress,
-    //   }]
-    // });
-    let commitTx = bitcoin.Psbt.fromHex(signedCommitPsbt).finalizeAllInputs().extractTransaction();
-    let revealTx = bitcoin.Psbt.fromHex(signedRevealPsbt).finalizeAllInputs().extractTransaction();
-    console.log("4");
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let revealTx = signedRevealPsbt.extractTransaction();
     console.log("Actual commit vsize", commitTx.virtualSize());
     console.log("Actual reveal vsize", revealTx.virtualSize());
-    console.log("Commit tx: ", commitTx.toHex());
-    console.log("Reveal tx: ", revealTx.toHex());
     // let pushedCommitTx = await broadcastTx(commitTx.toHex());
     // let pushedRevealTx = await broadcastTx(revealTx.toHex());
     console.log(pushedCommitTx, pushedRevealTx);
