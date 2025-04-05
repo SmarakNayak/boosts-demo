@@ -317,14 +317,28 @@ export const leather = {
   async switchNetwork(network) {
     throw new Error('Leather does not support network switching');
   },
-  async signPsbt(psbt) {
+  async signPsbt(psbt, signingIndexes = null) {
     this.windowCheck();
-    let response = await window.LeatherProvider.request('signPsbt', { hex: psbt.toHex() });
+    let requestParams = { hex: psbt.toHex() };
+    if (signingIndexes) {
+      requestParams.signAtIndex = signingIndexes.map(index => index.index);
+    }
+    console.log(requestParams);
+    let response = await window.LeatherProvider.request('signPsbt', requestParams);
     if (response.error) throw new Error(response.error.message);
     console.log(response);
     let signedPsbt = bitcoin.Psbt.fromHex(response.result.hex);
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async signPsbts(psbtArray, signingIndexesArray) {
+    this.windowCheck();
+    let signedPsbts = [];
+    for (let i = 0; i < psbtArray.length; i++) {
+      let finalizedPsbt = await this.signPsbt(psbtArray[i], signingIndexesArray[i]);
+      signedPsbts[i] = finalizedPsbt;
+    }
+    return signedPsbts;
   },
   async setupAccountChangeListener(callback) {
     console.log('Account change listener not supported for Leather');     
