@@ -402,6 +402,25 @@ export const okx = {
       return signedPsbt;
     }
   },
+  async signPsbts(psbtArray, signingIndexesArray) {
+    this.windowCheck();
+    let okxInterface;
+    if (this.network === 'mainnet') {
+      okxInterface = window.okxwallet.bitcoin;
+    } else if (this.network === 'testnet') {
+      okxInterface = window.okxwallet.bitcoinTestnet;
+    }
+    let psbtHexs = psbtArray.map(psbt => psbt.toHex());
+    let unisatOptions = signingIndexesArray.map(signingIndexes => {
+      return {
+        toSignInputs: signingIndexes,
+        autoFinalized: true
+      }
+    });
+    let signedPsbtHexs = await okxInterface.signPsbts(psbtHexs, unisatOptions);
+    let signedPsbts = signedPsbtHexs.map(hex => bitcoin.Psbt.fromHex(hex));
+    return signedPsbts;
+  },
   async setupAccountChangeListener(callback) {
     this.windowCheck();
 
@@ -506,7 +525,7 @@ export const magiceden = {
   async switchNetwork(network) {
     throw new Error('MagicEden does not support network switching');
   },
-  async signPsbt(psbt) {
+  async signPsbt(psbt, signingIndexes = null) {
     this.windowCheck();
     let inputsToSign = [
       {
@@ -519,28 +538,43 @@ export const magiceden = {
       }
     ];
 
-    psbt.data.inputs.forEach((input, inputIndex) => {
-      let inputAddress;
-      if (input.nonWitnessUtxo) {
-        const transaction = bitcoin.Transaction.fromBuffer(input.nonWitnessUtxo);
-        const output = transaction.outs[input.index];
-        inputAddress = bitcoin.address.fromOutputScript(
-          output.script,
-          this.network
-        );
-      } else if (input.witnessUtxo) {
-        inputAddress = bitcoin.address.fromOutputScript(
-          input.witnessUtxo.script,
-          this.network
-        );
-      } else {
-        throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
-      }
-      
-      if (inputAddress === this.paymentAddress || inputAddress === this.ordinalsAddress) {
-        inputsToSign.find(input => input.address === inputAddress).signingIndexes.push(inputIndex);
-      }
-    });
+    if (signingIndexes) {
+
+      signingIndexes.forEach(signingIndex => {
+        if (signingIndex.address === this.paymentAddress) {
+          inputsToSign[0].signingIndexes.push(signingIndex.index);
+        }
+        if (signingIndex.address === this.ordinalsAddress) {
+          inputsToSign[1].signingIndexes.push(signingIndex.index);
+        }
+      });
+
+    } else {
+
+      psbt.data.inputs.forEach((input, inputIndex) => {
+        let inputAddress;
+        if (input.nonWitnessUtxo) {
+          const transaction = bitcoin.Transaction.fromBuffer(input.nonWitnessUtxo);
+          const output = transaction.outs[input.index];
+          inputAddress = bitcoin.address.fromOutputScript(
+            output.script,
+            this.network
+          );
+        } else if (input.witnessUtxo) {
+          inputAddress = bitcoin.address.fromOutputScript(
+            input.witnessUtxo.script,
+            this.network
+          );
+        } else {
+          throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
+        }
+        
+        if (inputAddress === this.paymentAddress || inputAddress === this.ordinalsAddress) {
+          inputsToSign.find(input => input.address === inputAddress).signingIndexes.push(inputIndex);
+        }
+      });
+
+    }
 
     let psbtBase64= psbt.toBase64();
     let payload = {
@@ -557,6 +591,15 @@ export const magiceden = {
     let signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt);
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async signPsbts(psbtArray, signingIndexesArray) {
+    this.windowCheck();
+    let signedPsbts = [];
+    for (let i = 0; i < psbtArray.length; i++) {
+      let signedPsbt = this.signPsbt(psbtArray[i], signingIndexesArray[i]);
+      signedPsbts[i] = signedPsbt;
+    }
+    return signedPsbts;
   },
   async setupAccountChangeListener(callback) {
     this.windowCheck();
@@ -626,7 +669,7 @@ export const phantom = {
   async switchNetwork(network) {
     throw new Error('Phantom does not support network switching');
   },
-  async signPsbt(psbt) {
+  async signPsbt(psbt, signingIndexes = null) {
     this.windowCheck();
     let inputsToSign = [
       {
@@ -638,29 +681,40 @@ export const phantom = {
         signingIndexes: []
       }
     ];
+    if (signingIndexes) {
+      signingIndexes.forEach(signingIndex => {
+        if (signingIndex.address === this.paymentAddress) {
+          inputsToSign[0].signingIndexes.push(signingIndex.index);
+        }
+        if (signingIndex.address === this.ordinalsAddress) {
+          inputsToSign[1].signingIndexes.push(signingIndex.index);
+        }
+      });
+    } else {
+      psbt.data.inputs.forEach((input, inputIndex) => {
+        let inputAddress;
+        if (input.nonWitnessUtxo) {
+          const transaction = bitcoin.Transaction.fromBuffer(input.nonWitnessUtxo);
+          const output = transaction.outs[input.index];
+          inputAddress = bitcoin.address.fromOutputScript(
+            output.script,
+            this.network
+          );
+        } else if (input.witnessUtxo) {
+          inputAddress = bitcoin.address.fromOutputScript(
+            input.witnessUtxo.script,
+            NETWORKS[this.network].bitcoinjs
+          );
+        } else {
+          throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
+        }
+        
+        if (inputAddress === this.paymentAddress || inputAddress === this.ordinalsAddress) {
+          inputsToSign.find(input => input.address === inputAddress).signingIndexes.push(inputIndex);
+        }
+      });
+    }
 
-    psbt.data.inputs.forEach((input, inputIndex) => {
-      let inputAddress;
-      if (input.nonWitnessUtxo) {
-        const transaction = bitcoin.Transaction.fromBuffer(input.nonWitnessUtxo);
-        const output = transaction.outs[input.index];
-        inputAddress = bitcoin.address.fromOutputScript(
-          output.script,
-          this.network
-        );
-      } else if (input.witnessUtxo) {
-        inputAddress = bitcoin.address.fromOutputScript(
-          input.witnessUtxo.script,
-          NETWORKS[this.network].bitcoinjs
-        );
-      } else {
-        throw new Error('Malformed PSBT: input is missing nonWitnessUtxo or witnessUtxo');
-      }
-      
-      if (inputAddress === this.paymentAddress || inputAddress === this.ordinalsAddress) {
-        inputsToSign.find(input => input.address === inputAddress).signingIndexes.push(inputIndex);
-      }
-    });
     let psbtBytes = new Uint8Array(psbt.toBuffer());
     let signedPSBTBytes = await window.phantom.bitcoin.signPSBT(psbtBytes, {
       inputsToSign: inputsToSign,
@@ -669,6 +723,15 @@ export const phantom = {
     let signedPsbt = bitcoin.Psbt.fromBuffer(Buffer.from(signedPSBTBytes));
     let finalizedPsbt = signedPsbt.finalizeAllInputs();
     return finalizedPsbt;
+  },
+  async signPsbts(psbtArray, signingIndexesArray) {
+    this.windowCheck();
+    let signedPsbts = [];
+    for (let i = 0; i < psbtArray.length; i++) {
+      let signedPsbt = await this.signPsbt(psbtArray[i], signingIndexesArray[i]);
+      signedPsbts[i] = signedPsbt;
+    }
+    return signedPsbts;
   },
   async setupAccountChangeListener(callback) {
     this.windowCheck();
@@ -761,6 +824,18 @@ export const oyl = {
     });
     let signedPsbt = bitcoin.Psbt.fromHex(response.psbt);
     return signedPsbt;
+  },
+  async signPsbts(psbtArray, signingIndexesArray) {
+    this.windowCheck();
+    let response = await window.oyl.signPsbts(
+      psbtArray.map(psbt => ({
+        psbt: psbt.toHex(),
+        broadcast: false,
+        finalize: true,
+      }))
+    );
+    let signedPsbts = response.map(signedPsbt => bitcoin.Psbt.fromHex(signedPsbt.psbt));
+    return signedPsbts;
   },
   async setupAccountChangeListener(callback) {
     console.log('Account change listener not supported for Oyl');     
