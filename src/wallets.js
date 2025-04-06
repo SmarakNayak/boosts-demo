@@ -6,7 +6,6 @@
 import * as bitcoin from 'bitcoinjs-lib'
 import * as jsontokens from 'jsontokens'
 import { NETWORKS, getNetworkFromAddress } from './networks'
-import { sign } from 'crypto';
 
 export const unisat = {
   walletType: 'unisat',
@@ -131,6 +130,7 @@ export const xverse = {
   ordinalsAddress: null,
   paymentPublicKey: null,
   ordinalsPublicKey: null,
+  _accountChangedListener: null,
 
   windowCheck() {
     if (!window.XverseProviders?.BitcoinProvider) throw new Error('Xverse not installed');
@@ -271,10 +271,29 @@ export const xverse = {
     }
   },
   async setupAccountChangeListener(callback) {
-    console.log('Account change listener not supported for Xverse');     
+    console.log('Account change listener setup for Xverse');
+    const _accountChangedListener = window.XverseProviders.BitcoinProvider.addListener('accountChange', async (event) => {
+      // note: xverse tells us when the account is changed - but not what the new account is
+      // Clear the wallet addresses
+      this.paymentAddress = null;
+      this.ordinalsAddress = null;
+      this.paymentPublicKey = null;
+      this.ordinalsPublicKey = null;
+      
+      // Notify the app about disconnection
+      callback({
+        paymentAddress: null,
+        ordinalsAddress: null,
+        paymentPublicKey: null,
+        ordinalsPublicKey: null,
+        disconnected: true
+      });
+    });
+    this._accountChangedListener = _accountChangedListener;
   },
   async removeAccountChangeListener() {
-    //No listener to remove
+    this._accountChangedListener();
+    this._accountChangedListener = null;
   }
 }
 
