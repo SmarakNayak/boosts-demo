@@ -3,12 +3,15 @@
 //issues with wallets that don't support the features we want. We also want to avoid
 //having to write a lot of code for each wallet, so we want to keep the code as simple as possible.
 import * as bitcoin from 'bitcoinjs-lib';
+import { isP2PKH, isP2SHScript, isP2WPKH, isP2TR } from 'bitcoinjs-lib/src/psbt/psbtutils';
+import { toXOnly } from 'bitcoinjs-lib/src/psbt/bip371';
 import * as jsontokens from 'jsontokens';
 import { NETWORKS, getNetworkFromAddress } from './networks';
 
 class Wallet {
-  constructor(walletType) {
+  constructor(walletType, supportsTweakSigning = false) {
     this.walletType = walletType;
+    this.supportsTweakSigning = supportsTweakSigning;
     this.network = null;
     this.paymentAddress = null;
     this.ordinalsAddress = null;
@@ -38,7 +41,14 @@ class Wallet {
   }
 
   async signPsbts(psbtArray, signingIndexesArray) {
-    throw new Error('signPsbts must be implemented by subclass');
+    // Default implementation signs each PSBT one at a time
+    this.windowCheck();
+    let signedPsbts = []
+    for (let i = 0; i < psbtArray.length; i++) {
+      let signedPsbt = await this.signPsbt(psbtArray[i], signingIndexesArray[i]);
+      signedPsbts.push(signedPsbt);
+    }
+    return signedPsbts;
   }
 
   async setupAccountChangeListener(callback) {
@@ -56,6 +66,16 @@ class Wallet {
       paymentPublicKey: this.paymentPublicKey,
       ordinalsPublicKey: this.ordinalsPublicKey
     };
+  }
+
+  handleDisconnect(callback) {
+    console.log("Wallet disconnected or empty address received");
+    this.paymentAddress = null;
+    this.ordinalsAddress = null;
+    this.paymentPublicKey = null;
+    this.ordinalsPublicKey = null;
+    callback({ ...this.getAccountInfo(), disconnected: true });
+    this.removeAccountChangeListener();
   }
 
   getInputAddress(input) {
@@ -101,20 +121,33 @@ class Wallet {
     }));
   }
 
-  handleDisconnect(callback) {
-    console.log("Wallet disconnected or empty address received");
-    this.paymentAddress = null;
-    this.ordinalsAddress = null;
-    this.paymentPublicKey = null;
-    this.ordinalsPublicKey = null;
-    callback({ ...this.getAccountInfo(), disconnected: true });
-    this.removeAccountChangeListener();
+  getTaprootPublicKey() {
+    let paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
+    let ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
+    if (isP2TR(ordinalsAddressScript)) {
+      const addressDerivedFromInternal = bitcoin.payments.p2tr({
+        internalPubkey: toXOnly(Buffer.from(this.ordinalsPublicKey, 'hex')),
+        network: NETWORKS[this.network].bitcoinjs
+      });
+      const addressDerivedFromTweaked = bitcoin.payments.p2tr({
+        pubkey: toXOnly(Buffer.from(this.ordinalsPublicKey, 'hex')),
+        network: NETWORKS[this.network].bitcoinjs
+      });
+      console.log('Address derived treating public key as internal:', addressDerivedFromInternal);
+      console.log('Address derived treating public key as tweaked:', addressDerivedFromTweaked);
+      console.log('Reported address:', this.ordinalsAddress);
+      return this.ordinalsPublicKey;
+    }
+    if (isP2TR(paymentAddressScript)) {
+      return this.paymentPublicKey;
+    }
   }
+
 }
 
 class UnisatWallet extends Wallet {
   constructor() {
-    super('unisat');
+    super('unisat', true);
   }
 
   windowCheck() {
@@ -201,7 +234,7 @@ class UnisatWallet extends Wallet {
 
 class XverseWallet extends Wallet {
   constructor() {
-    super('xverse');
+    super('xverse', true);
   }
 
   windowCheck() {
@@ -258,28 +291,32 @@ class XverseWallet extends Wallet {
 
   async signPsbts(psbtArray, signingIndexesArray) {
     this.windowCheck();
-    try {
-      const psbts = psbtArray.map((psbt, i) => ({
-        psbtBase64: psbt.toBase64(),
-        inputsToSign: this.getInputsToSignGroupedNameless(psbt, signingIndexesArray[i]),
-        broadcast: false
-      }));
-      const response = await window.XverseProviders.BitcoinProvider.request("signMultipleTransactions", {
-        payload: {
-          network: { type: NETWORKS[this.network].xverse },
-          message: "Sign these transactions plz",
-          psbts
+    const psbts = psbtArray.map((psbt, i) => ({
+      psbtBase64: psbt.toBase64(),
+      inputsToSign: this.getInputsToSignGroupedNameless(psbt, signingIndexesArray[i]),
+      broadcast: false
+    }));
+    const response = await window.XverseProviders.BitcoinProvider.request("signMultipleTransactions", {
+      payload: {
+        network: { type: NETWORKS[this.network].xverse },
+        message: "Sign these transactions plz",
+        psbts
+      }
+    });
+    
+    if (response.error){
+      if (response.error.message.includes('is not supported')) {
+        let signedPsbts = []
+        for (let i = 0; i < psbtArray.length; i++) {
+          let signedPsbt = await this.signPsbt(psbtArray[i], signingIndexesArray[i]);
+          signedPsbts.push(signedPsbt);
         }
-      });
-      if (response.error) throw new Error(response.error);
-      return response.result.map(r => bitcoin.Psbt.fromBase64(r.psbt).finalizeAllInputs());
-    } catch (error) {
-      if (error.message.includes('is not supported')) {
-        console.log('Xverse does not support signMultipleTransactions, trying one at a time');
-        return Promise.all(psbtArray.map((psbt, i) => this.signPsbt(psbt, signingIndexesArray[i])));
+        return signedPsbts;
       }
       throw error;
     }
+
+    return response.result.map(r => bitcoin.Psbt.fromBase64(r.psbt).finalizeAllInputs());
   }
 
   async setupAccountChangeListener(callback) {
@@ -298,7 +335,7 @@ class XverseWallet extends Wallet {
 
 class LeatherWallet extends Wallet {
   constructor() {
-    super('leather');
+    super('leather', false);
   }
 
   windowCheck() {
@@ -344,15 +381,11 @@ class LeatherWallet extends Wallet {
     return signedPsbt.finalizeAllInputs();
   }
 
-  async signPsbts(psbtArray, signingIndexesArray) {
-    this.windowCheck();
-    return Promise.all(psbtArray.map((psbt, i) => this.signPsbt(psbt, signingIndexesArray[i])));
-  }
 }
 
 class OkxWallet extends Wallet {
   constructor() {
-    super('okx');
+    super('okx', true);
   }
 
   windowCheck() {
@@ -437,7 +470,7 @@ class OkxWallet extends Wallet {
 
 class MagicEdenWallet extends Wallet {
   constructor() {
-    super('magiceden');
+    super('magiceden', true);
   }
 
   windowCheck() {
@@ -446,6 +479,7 @@ class MagicEdenWallet extends Wallet {
 
   async connect(network) {
     this.windowCheck();
+    if (network !== 'mainnet') throw new Error('Magiceden only supports mainnet');
     this.network = network;
     const payload = { purposes: ['payment', 'ordinals'] };
     const request = jsontokens.createUnsecuredToken(payload);
@@ -487,11 +521,6 @@ class MagicEdenWallet extends Wallet {
     return signedPsbt.finalizeAllInputs();
   }
 
-  async signPsbts(psbtArray, signingIndexesArray) {
-    this.windowCheck();
-    return Promise.all(psbtArray.map((psbt, i) => this.signPsbt(psbt, signingIndexesArray[i])));
-  }
-
   async setupAccountChangeListener(callback) {
     this.windowCheck();
     this._accountChangedListener = async (accounts) => {
@@ -517,7 +546,7 @@ class MagicEdenWallet extends Wallet {
 
 class PhantomWallet extends Wallet {
   constructor() {
-    super('phantom');
+    super('phantom', true);
   }
 
   windowCheck() {
@@ -561,11 +590,6 @@ class PhantomWallet extends Wallet {
     return signedPsbt.finalizeAllInputs();
   }
 
-  async signPsbts(psbtArray, signingIndexesArray) {
-    this.windowCheck();
-    return Promise.all(psbtArray.map((psbt, i) => this.signPsbt(psbt, signingIndexesArray[i])));
-  }
-
   async setupAccountChangeListener(callback) {
     this.windowCheck();
     this._accountChangedListener = async (accounts) => {
@@ -595,7 +619,7 @@ class PhantomWallet extends Wallet {
 
 class OylWallet extends Wallet {
   constructor() {
-    super('oyl');
+    super('oyl', true);
   }
 
   windowCheck() {

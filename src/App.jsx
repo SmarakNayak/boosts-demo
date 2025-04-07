@@ -11,13 +11,8 @@ import * as ecc2 from '@bitcoinerlab/secp256k1'
 import * as tinyecc from 'tiny-secp256k1'
 import { BIP32Factory } from 'bip32'
 
-import * as btc from '@scure/btc-signer';
-import * as ordinals from 'micro-ordinals';
-import { hex, utf8 } from '@scure/base';
-
-import {unisat, xverse, leather, okx, magiceden, phantom, oyl} from './wallets'
+import { UnisatWallet, XverseWallet, LeatherWallet, OkxWallet, MagicEdenWallet, PhantomWallet, OylWallet } from './wallets'
 import { NETWORKS } from './networks'
-import { tapLeafHash } from '@scure/btc-signer/payment'
 
 const bip32 = BIP32Factory(ecc2);
 bitcoin.initEccLib(tinyecc);
@@ -216,25 +211,25 @@ function App() {
     let walletInstance = null;
     switch (walletType) {
       case 'unisat':    
-        walletInstance = unisat;
+        walletInstance = new UnisatWallet();
         break;
       case 'xverse':
-        walletInstance = xverse;
+        walletInstance = new XverseWallet();
         break;
       case 'leather':
-        walletInstance = leather;
+        walletInstance = new LeatherWallet();
         break;
       case 'okx':
-        walletInstance = okx;
+        walletInstance = new OkxWallet();
         break;
       case 'magiceden':
-        walletInstance = magiceden;
+        walletInstance = new MagicEdenWallet();
         break;
       case 'phantom':
-        walletInstance = phantom;
+        walletInstance = new PhantomWallet();
         break;
       case 'oyl':
-        walletInstance = oyl;
+        walletInstance = new OylWallet();
         break;
       default:
         throw new Error('Unsupported wallet type');
@@ -243,6 +238,7 @@ function App() {
     setWallet(walletInstance);
     setIsConnected(true);
     setIsModalOpen(false);
+    walletInstance.getTaprootPublicKey();
     walletInstance.setupAccountChangeListener((accounts) => {
       console.log(accounts);
       if (accounts?.disconnected === true) {
