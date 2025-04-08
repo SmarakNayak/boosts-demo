@@ -286,9 +286,11 @@ function App() {
     //   })
     // );
     
-    if (hasTaproot(wallet, network)) {
+    if (wallet.hasSignableTweakedTaproot()) {
+      //using tweaked taproot
       createInscriptionsWithWalletTaproot(inscriptions);
     } else {
+      //using ephemeral taproot
       createInscriptionsWithTempTaproot(inscriptions);
     }
   }
@@ -301,13 +303,7 @@ function App() {
 
     // get unsigned reveal transaction
     let revealPublicKey = getTaprootPublicKey(wallet, network);
-    revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
-    console.log("pubkey: ", Buffer.from(revealPublicKey, "hex"));
-    console.log("derived address: ", Address.p2tr.fromPubKey(Buffer.from(revealPublicKey, 'hex'), network));
-    let tweakedUnisatPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
-    console.log("tweaked pubkey: ", tweakedUnisatPublicKey);
-    console.log("tweaked address: ", Address.p2tr.fromPubKey(tweakedUnisatPublicKey, network));
-    console.log("address: ", wallet.ordinalsAddress);
+    //revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
     
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
     // get & sign commit transaction
@@ -333,8 +329,8 @@ function App() {
     let revealTx = signedRevealPsbt.extractTransaction();
     console.log("Actual commit vsize", commitTx.virtualSize());
     console.log("Actual reveal vsize", revealTx.virtualSize());
-    // let pushedCommitTx = await broadcastTx(commitTx.toHex());
-    // let pushedRevealTx = await broadcastTx(revealTx.toHex());
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    let pushedRevealTx = await broadcastTx(revealTx.toHex());
     console.log(pushedCommitTx, pushedRevealTx);
   }
 
@@ -808,3 +804,4 @@ export default App
 
 //TODO: Backup Reveal Tx
 //TODO: Use taproot address where possible
+//TODO: Add submit package endpoint (mainnet only)

@@ -121,6 +121,13 @@ class Wallet {
     }));
   }
 
+  hasSignableTweakedTaproot() {
+    if (!this.supportsTweakSigning) return false;
+    const paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
+    const ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
+    return isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript);
+  }
+
   getTaprootPublicKey() {
     let paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
     let ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
@@ -133,8 +140,8 @@ class Wallet {
         pubkey: toXOnly(Buffer.from(this.ordinalsPublicKey, 'hex')),
         network: NETWORKS[this.network].bitcoinjs
       });
-      console.log('Address derived treating public key as internal:', addressDerivedFromInternal);
-      console.log('Address derived treating public key as tweaked:', addressDerivedFromTweaked);
+      console.log('Address derived treating public key as internal:', addressDerivedFromInternal.address);
+      console.log('Address derived treating public key as tweaked:', addressDerivedFromTweaked.address);
       console.log('Reported address:', this.ordinalsAddress);
       return this.ordinalsPublicKey;
     }
@@ -142,7 +149,6 @@ class Wallet {
       return this.paymentPublicKey;
     }
   }
-
 }
 
 class UnisatWallet extends Wallet {
@@ -303,7 +309,7 @@ class XverseWallet extends Wallet {
         psbts
       }
     });
-    
+
     if (response.error){
       if (response.error.message.includes('is not supported')) {
         let signedPsbts = []
