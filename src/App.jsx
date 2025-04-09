@@ -142,15 +142,6 @@ const getRevealScript = (inscriptions, revealPublicKey) => {
 }
 
 
-const hasTaproot = (wallet, network) => {
-  let paymentAddressScript = bitcoin.address.toOutputScript(wallet.paymentAddress, NETWORKS[network].bitcoinjs);
-  let ordinalsAddressScript = bitcoin.address.toOutputScript(wallet.ordinalsAddress, NETWORKS[network].bitcoinjs);
-  if (isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript)) {
-    return true;
-  }
-  return false;
-}
-
 const getTaprootPublicKey = (wallet, network) => {
   let paymentAddressScript = bitcoin.address.toOutputScript(wallet.paymentAddress, NETWORKS[network].bitcoinjs);
   let ordinalsAddressScript = bitcoin.address.toOutputScript(wallet.ordinalsAddress, NETWORKS[network].bitcoinjs);
@@ -286,24 +277,32 @@ function App() {
     //   })
     // );
     
-    if (wallet.hasSignableTweakedTaproot()) {
-      //using tweaked taproot
-      createInscriptionsWithWalletTaproot(inscriptions);
-    } else {
-      //using ephemeral taproot
-      createInscriptionsWithTempTaproot(inscriptions);
+    let creationMethod = wallet.getInscriptionCreationMethod();
+    if (creationMethod === 'ephemeral_key') {
+      //using ephemeral key
+      console.log("Using ephemeral key");
+      createInscriptionsWithEphemeralKey(inscriptions);
+    }
+    if (creationMethod === 'tweaked_key_one_sign') {
+      //using tweaked key
+      console.log("Using tweaked key");
+      createInscriptionsWithTweakedKey(inscriptions);
+    }
+    if (creationMethod === 'tweaked_key_two_sign') {
+      //using tweaked key with two signers
+      console.log("Using tweaked key with two signers");
+      createInscriptionsWithTweakedKeyTwoSign(inscriptions);
     }
   }
 
-  const createInscriptionsWithWalletTaproot = async (inscriptions) => {
+  const createInscriptionsWithTweakedKey = async (inscriptions) => {
     // create dummy tx to get reveal vsize
     let dummyPrivateKey = Buffer.from(await generatePrivateKey(NETWORKS[network].bitcoinjs)).toString('hex');
-    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);    
-    console.log("Estimated reveal vsize", estRevealVSize);
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
 
     // get unsigned reveal transaction
     let revealPublicKey = getTaprootPublicKey(wallet, network);
-    //revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
     
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
     // get & sign commit transaction
@@ -315,9 +314,10 @@ function App() {
         address: wallet.paymentAddress
       }
     });
+    console.log("Expected commit tx id: ", tempCommitTx.getId());
+    console.log(tempCommitTx);
     // get and sign reveal transaction
     let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, tempCommitTx.getId(), estimatedRevealFee, network);
-    console.log("reveal psbt:", unsignedRevealPsbt.toBase64());
     let [signedCommitPsbt, signedRevealPsbt] = await wallet.signPsbts(
       [commitPsbt, unsignedRevealPsbt],
       [
@@ -326,15 +326,44 @@ function App() {
       ]
     );
     let commitTx = signedCommitPsbt.extractTransaction();
+    console.log("Actual commit txid", commitTx.getId());
+    console.log(commitTx);
     let revealTx = signedRevealPsbt.extractTransaction();
-    console.log("Actual commit vsize", commitTx.virtualSize());
-    console.log("Actual reveal vsize", revealTx.virtualSize());
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
     let pushedRevealTx = await broadcastTx(revealTx.toHex());
     console.log(pushedCommitTx, pushedRevealTx);
   }
 
-  const createInscriptionsWithTempTaproot = async (inscriptions) => {
+  const createInscriptionsWithTweakedKeyTwoSign = async (inscriptions) => {
+    // create dummy tx to get reveal vsize
+    let dummyPrivateKey = Buffer.from(await generatePrivateKey(NETWORKS[network].bitcoinjs)).toString('hex');
+    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
+
+    // get unsigned reveal transaction
+    let revealPublicKey = getTaprootPublicKey(wallet, network);
+    //revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    
+    let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
+    // get & sign commit transaction
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
+    let toSignCommitInputs = commitPsbt.data.inputs.map((input, index) => {
+      return {
+        index,
+        address: wallet.paymentAddress
+      }
+    });
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt, toSignCommitInputs);
+    let commitTx = signedCommitPsbt.extractTransaction();
+    // get and sign reveal transaction
+    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTx.getId(), estimatedRevealFee, network);
+    let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt, [{ index: 0, address: wallet.ordinalsAddress }]);
+    let revealTx = signedRevealPsbt.extractTransaction();
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    let pushedRevealTx = await broadcastTx(revealTx.toHex());
+    console.log(pushedCommitTx, pushedRevealTx);
+  }
+
+  const createInscriptionsWithEphemeralKey = async (inscriptions) => {
     let revealPrivateKeyBuffer = await generatePrivateKey(NETWORKS[network].bitcoinjs);
     let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
     let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);

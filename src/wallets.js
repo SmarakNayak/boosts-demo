@@ -128,6 +128,18 @@ class Wallet {
     return isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript);
   }
 
+  getInscriptionCreationMethod() {
+    const paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
+    const ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
+    // need tweak signing + taproot address + p2wpkh or p2tr for tweaked one sign
+    // need tweak signing + taproot address for tweaked two sign
+    // otherwise ephemeral key
+    if (!this.supportsTweakSigning) return 'ephemeral_key';
+    if (!(isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript))) return 'ephemeral_key';
+    if (isP2TR(paymentAddressScript) || isP2WPKH(paymentAddressScript)) return 'tweaked_key_one_sign';
+    return 'tweaked_key_two_sign';
+  }
+
   getTaprootPublicKey() {
     let paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
     let ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
@@ -203,13 +215,18 @@ class UnisatWallet extends Wallet {
 
   async signPsbts(psbtArray, signingIndexesArray) {
     this.windowCheck();
+    console.log('unisgned revealPSBT:', psbtArray[1].toBase64());
     const psbtHexs = psbtArray.map(psbt => psbt.toHex());
     const unisatOptions = signingIndexesArray.map(signingIndexes => ({
       toSignInputs: signingIndexes,
-      autoFinalized: true
+      autoFinalized: false
     }));
     const signedPsbtHexs = await window.unisat.signPsbts(psbtHexs, unisatOptions);
-    return signedPsbtHexs.map(hex => bitcoin.Psbt.fromHex(hex));
+    const psbts = signedPsbtHexs.map(hex => bitcoin.Psbt.fromHex(hex));
+    console.log('Signed revealPSBT:', psbts[1].toBase64());
+    const finalizedPsbts = psbts.map(psbt => psbt.finalizeAllInputs());
+    console.log('Finalized revealPSBT:', finalizedPsbts[1].toBase64());
+    return finalizedPsbts;
   }
 
   async setupAccountChangeListener(callback) {
@@ -285,6 +302,7 @@ class XverseWallet extends Wallet {
     this.windowCheck();
     const inputsToSign = this.getInputsToSignGroupedNameless(psbt, signingIndexes);
     const psbtBase64 = psbt.toBase64();
+    console.log('Signing PSBT with Xverse:', psbtBase64, inputsToSign);
     const response = await window.XverseProviders.BitcoinProvider.request("signPsbt", {
       psbt: psbtBase64,
       signInputs: inputsToSign,
@@ -292,7 +310,11 @@ class XverseWallet extends Wallet {
     });
     if (response.error) throw new Error(response.error.message);
     const signedPsbt = bitcoin.Psbt.fromBase64(response.result.psbt);
-    return signedPsbt.finalizeAllInputs();
+    if (signedPsbt.data.inputs[0].tapKeySig && signedPsbt.data.inputs[0].tapScriptSig) { // hacky af
+      delete signedPsbt.data.inputs[0].tapKeySig;
+    }
+    let finalizedPsbt = signedPsbt.finalizeAllInputs();
+    return finalizedPsbt;
   }
 
   async signPsbts(psbtArray, signingIndexesArray) {
@@ -302,6 +324,12 @@ class XverseWallet extends Wallet {
       inputsToSign: this.getInputsToSignGroupedNameless(psbt, signingIndexesArray[i]),
       broadcast: false
     }));
+    // let payload = {
+    //   network: { type: NETWORKS[this.network].xverse },
+    //   message: 'Sign these transactions plz',
+    //   psbts
+    // };
+    // let request = jsontokens.createUnsecuredToken(payload);
     const response = await window.XverseProviders.BitcoinProvider.request("signMultipleTransactions", {
       payload: {
         network: { type: NETWORKS[this.network].xverse },
@@ -312,6 +340,7 @@ class XverseWallet extends Wallet {
 
     if (response.error){
       if (response.error.message.includes('is not supported')) {
+        console.log('Xverse does not support signing multiple PSBTs at once, falling back to single signPsbt calls');
         let signedPsbts = []
         for (let i = 0; i < psbtArray.length; i++) {
           let signedPsbt = await this.signPsbt(psbtArray[i], signingIndexesArray[i]);
