@@ -155,10 +155,19 @@ class Wallet {
       console.log('Address derived treating public key as internal:', addressDerivedFromInternal.address);
       console.log('Address derived treating public key as tweaked:', addressDerivedFromTweaked.address);
       console.log('Reported address:', this.ordinalsAddress);
-      return this.ordinalsPublicKey;
+      // remove first byte of public key if 33 bytes to get x-only
+      let xonly_key = this.ordinalsPublicKey;
+      if (xonly_key.length === 66) {
+        xonly_key = xonly_key.slice(2);
+      }
+      return xonly_key;
     }
     if (isP2TR(paymentAddressScript)) {
-      return this.paymentPublicKey;
+      let xonly_key = this.paymentPublicKey;
+      if (xonly_key.length === 66) {
+        xonly_key = xonly_key.slice(2);
+      }
+      return xonly_key;
     }
   }
 }

@@ -141,19 +141,6 @@ const getRevealScript = (inscriptions, revealPublicKey) => {
   return script;
 }
 
-
-const getTaprootPublicKey = (wallet, network) => {
-  let paymentAddressScript = bitcoin.address.toOutputScript(wallet.paymentAddress, NETWORKS[network].bitcoinjs);
-  let ordinalsAddressScript = bitcoin.address.toOutputScript(wallet.ordinalsAddress, NETWORKS[network].bitcoinjs);
-  if (isP2TR(ordinalsAddressScript)) {
-    return wallet.ordinalsPublicKey;
-  }
-  if (isP2TR(paymentAddressScript)) {
-    return wallet.paymentPublicKey;
-  }
-  throw new Error("Unsupported address type");
-}
-
 const getRevealTapscriptData = (inscriptions, revealPublicKey) => {
   const script = getRevealScript(inscriptions, revealPublicKey);
   const tapLeafHash = Tap.encodeScript(script); // sha256 hash of the script buffer in hex
@@ -301,7 +288,7 @@ function App() {
     let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
 
     // get unsigned reveal transaction
-    let revealPublicKey = getTaprootPublicKey(wallet, network);
+    let revealPublicKey = wallet.getTaprootPublicKey(wallet, network);
     revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
     
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
@@ -314,20 +301,16 @@ function App() {
         address: wallet.paymentAddress
       }
     });
-    console.log("Expected commit tx id: ", tempCommitTx.getId());
-    console.log(tempCommitTx);
     // get and sign reveal transaction
     let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, tempCommitTx.getId(), estimatedRevealFee, network);
     let [signedCommitPsbt, signedRevealPsbt] = await wallet.signPsbts(
       [commitPsbt, unsignedRevealPsbt],
       [
         toSignCommitInputs,
-        [{ index: 0, address: wallet.ordinalsAddress }]
+        [{ index: 0, publicKey: wallet.ordinalsPublicKey, useTweakSigner: true }] //address: wallet.ordinalsAddress, 
       ]
     );
     let commitTx = signedCommitPsbt.extractTransaction();
-    console.log("Actual commit txid", commitTx.getId());
-    console.log(commitTx);
     let revealTx = signedRevealPsbt.extractTransaction();
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
     let pushedRevealTx = await broadcastTx(revealTx.toHex());
@@ -340,8 +323,8 @@ function App() {
     let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
 
     // get unsigned reveal transaction
-    let revealPublicKey = getTaprootPublicKey(wallet, network);
-    //revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    let revealPublicKey = wallet.getTaprootPublicKey(wallet, network);
+    revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
     
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
     // get & sign commit transaction
@@ -424,8 +407,6 @@ function App() {
     const script = getRevealScript(inscriptions, pubKey);
     const tapleaf = Tap.encodeScript(script);
     const [tpubkey, cblock] = Tap.getPubKey(pubKey, { target: tapleaf });
-    console.log("Reveal pubkey: ", pubKey.hex);
-    console.log("Reveal tpubkey: ", tpubkey);
 
     let inputs = [{
       txid: commitTxId,
@@ -448,10 +429,6 @@ function App() {
 
     const sig = Signer.taproot.sign(secKey, txData, 0, { extension: tapleaf });
     txData.vin[0].witness = [sig, script, cblock];
-    console.log("CMD Reveal TX witness: ");
-    console.log(sig.hex, Script.encode(script, false).hex, cblock);
-    console.log("CMD scriptpubkey: ", Tx.util.readScriptPubKey(['OP_1', tpubkey]).data.hex);
-    console.log("CMD Verifying sig: ", Signer.taproot.verify(txData, 0, { extension: tapleaf, pubkey: pubKey }));
 
     let sizeData = Tx.util.getTxSize(txData);
     let vSize = sizeData.vsize;
