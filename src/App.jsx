@@ -216,7 +216,6 @@ function App() {
     setWallet(walletInstance);
     setIsConnected(true);
     setIsModalOpen(false);
-    walletInstance.getTaprootPublicKey();
     walletInstance.setupAccountChangeListener((accounts) => {
       console.log(accounts);
       if (accounts?.disconnected === true) {
@@ -288,8 +287,8 @@ function App() {
     let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
 
     // get unsigned reveal transaction
-    let revealPublicKey = wallet.getTaprootPublicKey(wallet, network);
-    revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    let tweakedWalletTaproot = wallet.getTweakedTaproot(wallet, network);
+    let revealPublicKey = tweakedWalletTaproot.pubkey;
     
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
     // get & sign commit transaction
@@ -307,7 +306,7 @@ function App() {
       [commitPsbt, unsignedRevealPsbt],
       [
         toSignCommitInputs,
-        [{ index: 0, publicKey: wallet.ordinalsPublicKey, useTweakSigner: true }] //address: wallet.ordinalsAddress, 
+        [{ index: 0, address: tweakedWalletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]
       ]
     );
     let commitTx = signedCommitPsbt.extractTransaction();
@@ -323,8 +322,8 @@ function App() {
     let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
 
     // get unsigned reveal transaction
-    let revealPublicKey = wallet.getTaprootPublicKey(wallet, network);
-    revealPublicKey = bitcoin.payments.p2tr({internalPubkey: toXOnly(Buffer.from(revealPublicKey, 'hex'))}).pubkey;
+    let tweakedWalletTaproot = wallet.getTweakedTaproot(wallet, network);
+    let revealPublicKey = tweakedWalletTaproot.pubkey;
     
     let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
     // get & sign commit transaction
@@ -339,7 +338,7 @@ function App() {
     let commitTx = signedCommitPsbt.extractTransaction();
     // get and sign reveal transaction
     let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTx.getId(), estimatedRevealFee, network);
-    let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt, [{ index: 0, address: wallet.ordinalsAddress }]);
+    let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt, [{ index: 0, address: tweakedWalletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]);
     let revealTx = signedRevealPsbt.extractTransaction();
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
     let pushedRevealTx = await broadcastTx(revealTx.toHex());
@@ -809,5 +808,4 @@ const Modal = ({ isOpen, onClose, children }) => {
 export default App
 
 //TODO: Backup Reveal Tx
-//TODO: Use taproot address where possible
 //TODO: Add submit package endpoint (mainnet only)

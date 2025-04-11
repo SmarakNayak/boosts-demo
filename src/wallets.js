@@ -140,34 +140,33 @@ class Wallet {
     return 'tweaked_key_two_sign';
   }
 
-  getTaprootPublicKey() {
+  getTweakedTaproot() {
     let paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
     let ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
     if (isP2TR(ordinalsAddressScript)) {
-      const addressDerivedFromInternal = bitcoin.payments.p2tr({
-        internalPubkey: toXOnly(Buffer.from(this.ordinalsPublicKey, 'hex')),
-        network: NETWORKS[this.network].bitcoinjs
-      });
-      const addressDerivedFromTweaked = bitcoin.payments.p2tr({
-        pubkey: toXOnly(Buffer.from(this.ordinalsPublicKey, 'hex')),
-        network: NETWORKS[this.network].bitcoinjs
-      });
-      console.log('Address derived treating public key as internal:', addressDerivedFromInternal.address);
-      console.log('Address derived treating public key as tweaked:', addressDerivedFromTweaked.address);
-      console.log('Reported address:', this.ordinalsAddress);
       // remove first byte of public key if 33 bytes to get x-only
-      let xonly_key = this.ordinalsPublicKey;
-      if (xonly_key.length === 66) {
-        xonly_key = xonly_key.slice(2);
+      let xonlyInternalKey = this.ordinalsPublicKey;
+      if (xonlyInternalKey.length === 66) {
+        xonlyInternalKey = xonlyInternalKey.slice(2);
       }
-      return xonly_key;
+      let tweakedTaproot = bitcoin.payments.p2tr({
+        internalPubkey: toXOnly(Buffer.from(xonlyInternalKey, 'hex')),
+        network: NETWORKS[this.network].bitcoinjs
+      }); 
+
+      return tweakedTaproot;
     }
+
     if (isP2TR(paymentAddressScript)) {
-      let xonly_key = this.paymentPublicKey;
-      if (xonly_key.length === 66) {
-        xonly_key = xonly_key.slice(2);
+      let xonlyInternalKey = this.paymentPublicKey;
+      if (xonlyInternalKey.length === 66) {
+        xonlyInternalKey = xonlyInternalKey.slice(2);
       }
-      return xonly_key;
+      let tweakedTaproot = bitcoin.payments.p2tr({
+        internalPubkey: toXOnly(Buffer.from(xonlyInternalKey, 'hex')),
+        network: NETWORKS[this.network].bitcoinjs
+      });
+      return tweakedTaproot;
     }
   }
 }
