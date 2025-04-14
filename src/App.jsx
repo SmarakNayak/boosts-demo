@@ -554,18 +554,20 @@ function App() {
   }
 
   async function submitPackage(commitHex, revealHex) {
-    const url = `https://mempool.space/${NETWORKS[network].mempool}api/v1/txs/package?maxfeerate=100`;
+    const url = `https://blue.vermilion.place/api/submit_package`;
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'Content-Type': 'text/plain',
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify([commitHex, revealHex]),
     });
 
     if (!response.ok) {
       console.log(response);
+      let text = await response.text();
+      console.log(text);
       throw new Error(`Failed to broadcast transactions: ${response.statusText}`);
     }
 
@@ -808,4 +810,3 @@ const Modal = ({ isOpen, onClose, children }) => {
 export default App
 
 //TODO: Backup Reveal Tx
-//TODO: Add submit package endpoint (mainnet only)
