@@ -813,3 +813,4 @@ export default App
 //TODO: Sweep Reveal address
 //TODO: Add mobile wallet support
 //TODO: Add hardware wallet support
+//TODO: Add signet support
