@@ -810,3 +810,6 @@ const Modal = ({ isOpen, onClose, children }) => {
 export default App
 
 //TODO: Backup Reveal Tx
+//TODO: Sweep Reveal address
+//TODO: Add mobile wallet support
+//TODO: Add hardware wallet support
