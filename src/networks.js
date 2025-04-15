@@ -16,7 +16,15 @@ export const NETWORKS = {
     unisat: 'BITCOIN_MAINNET',
     xverse: 'Mainnet',
     leather: 'mainnet'
-  }
+  },
+  'signet': {
+    bitcoinjs: bitcoin.networks.signet,
+    tapscript: 'signet',
+    mempool: 'signet/',
+    unisat: 'BITCOIN_SIGNET',
+    xverse: 'Signet',
+    leather: 'signet'
+  },
 }
 
 export function getNetworkFromAddress(address) {

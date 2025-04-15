@@ -29,17 +29,17 @@ async function generatePrivateKey(bitcoinjsNetwork) {
 
 function wrapECPairWithBufferPublicKey(ecpair) {
   return {
-      publicKey: Buffer.from(ecpair.publicKey),
-      compressed: ecpair.compressed,
-      network: ecpair.network,
-      lowR: ecpair.lowR,
-      privateKey: ecpair.privateKey ? Buffer.from(ecpair.privateKey) : undefined,
-      sign: ecpair.sign.bind(ecpair),
-      toWIF: ecpair.toWIF.bind(ecpair),
-      tweak: ecpair.tweak.bind(ecpair),
-      verify: ecpair.verify.bind(ecpair),
-      verifySchnorr: ecpair.verifySchnorr.bind(ecpair),
-      signSchnorr: ecpair.signSchnorr.bind(ecpair),
+    publicKey: Buffer.from(ecpair.publicKey),
+    compressed: ecpair.compressed,
+    network: ecpair.network,
+    lowR: ecpair.lowR,
+    privateKey: ecpair.privateKey ? Buffer.from(ecpair.privateKey) : undefined,
+    sign: ecpair.sign.bind(ecpair),
+    toWIF: ecpair.toWIF.bind(ecpair),
+    tweak: ecpair.tweak.bind(ecpair),
+    verify: ecpair.verify.bind(ecpair),
+    verifySchnorr: ecpair.verifySchnorr.bind(ecpair),
+    signSchnorr: ecpair.signSchnorr.bind(ecpair),
   };
 }
 
@@ -435,6 +435,35 @@ function App() {
     return [txData, vSize];
   }
 
+  const getRevealTransactionV2 = (inscriptions, inscriptionReceiveAddress, revealKeyPair, commitTxId, revealFee) => {
+    const pubkey = revealKeyPair.publicKey;
+    const script = getRevealScript(inscriptions, pubkey);
+    const tapleaf = Tap.encodeScript(script);
+    const [tpubkey, cblock] = Tap.getPubKey(pubkey, { target: tapleaf });
+    const tweakedTaproot = bitcoin.payments.p2tr({
+      internalKey: toXOnly(tpubkey),
+      network: NETWORKS[network].bitcoinjs
+    });
+
+    const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs })
+      .addInput({
+        hash: commitTxId,
+        index: 0,
+        witnessUtxo: {
+          script: tweakedTaproot.output,
+          value: revealFee,
+        },
+        tapLeafScript: [{
+          leafVersion: 192, // Tapscript leaf version (0xc0)
+          script: Buffer.from(Script.encode(script, false)), // Serialized Tapscript
+          controlBlock: Buffer.from(cblock, 'hex'), // Control block for script path
+        }]
+      })
+
+
+
+  }
+
   const getCommitTransaction = async(inscriptions, paymentAddress, paymentPublicKey, tweakedRevealPublicKey, revealVSize) => {
     const commitAddress = Address.p2tr.fromPubKey(tweakedRevealPublicKey, network);
 
@@ -810,7 +839,7 @@ const Modal = ({ isOpen, onClose, children }) => {
 export default App
 
 //TODO: Backup Reveal Tx
-//TODO: Sweep Reveal address
+//TODO: Sweep tweaked address
 //TODO: Add mobile wallet support
 //TODO: Add hardware wallet support
 //TODO: Add signet support
