@@ -378,7 +378,7 @@ class XverseWallet extends Wallet {
 
 class LeatherWallet extends Wallet {
   constructor() {
-    super('leather', false);
+    super('leather', false); // Error: Can not finalize taproot input #0. No tapleaf script signature provided.
   }
 
   windowCheck() {

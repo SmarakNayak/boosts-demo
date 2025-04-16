@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import './App.css'
+
 import * as ecc from '@cmdcode/crypto-utils'
 import { Address, Signer, Tap, Tx, Script } from '@cmdcode/tapscript'
 import * as bitcoin from 'bitcoinjs-lib'
@@ -151,9 +152,6 @@ const getRevealTapscriptData = (inscriptions, revealPublicKey) => {
 const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, tapscriptData, revealPublicKey, commitTxId, revealFee, network) => {
   const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs });
   let commitAddress = Address.p2tr.fromPubKey(tapscriptData.tweakedPubkey, network);
-  console.log("Commit Address", commitAddress);
-
-  console.log(Script.encode(tapscriptData.script).hex);
 
   psbt.addInput({
     hash: commitTxId,
@@ -176,6 +174,48 @@ const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, t
   })));
 
   return psbt;
+}
+
+const getRevealTransactionV2 = (inscriptions, inscriptionReceiveAddress, tapscriptData, revealKeyPair, commitTxId, revealFee, network, sign=true) => {
+  const tweakedRevealTaproot = bitcoin.payments.p2tr({
+    pubkey: toXOnly(Buffer.from(tapscriptData.tweakedPubkey, 'hex')),
+    network: NETWORKS[network].bitcoinjs
+  });
+  
+  const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs })
+    .addInput({
+      hash: commitTxId,
+      index: 0,
+      witnessUtxo: {
+        script: tweakedRevealTaproot.output,
+        value: revealFee,
+      },
+      tapLeafScript: [{
+        leafVersion: 192, // Tapscript leaf version (0xc0)
+        script: Buffer.from(Script.encode(tapscriptData.script, false)), // Serialized Tapscript
+        controlBlock: Buffer.from(tapscriptData.cblock, 'hex'), // Control block for script path
+      }],
+      tapInternalKey: toXOnly(revealKeyPair.publicKey), //do we need this?
+    })
+    .addOutputs(inscriptions.map((inscription) => ({
+      address: inscriptionReceiveAddress,
+      value: inscription.postage,
+    })));
+  
+  if (sign) {
+    psbt.signInput(0, revealKeyPair);
+    psbt.finalizeAllInputs();
+  }
+  return psbt;
+}
+
+const getRevealVSize = (inscriptions, inscriptionReceiveAddress, network) => {
+  let dummyKeyPair = generateKeyPair(NETWORKS[network].bitcoinjs);    
+  let tapscriptData = getRevealTapscriptData(inscriptions, toXOnly(dummyKeyPair.publicKey));
+  let total_postage = inscriptions.reduce((acc, inscription) => acc + inscription.postage, 0);
+  let dummyRevealTransaction = getRevealTransactionV2(inscriptions, inscriptionReceiveAddress, tapscriptData, dummyKeyPair, "0".repeat(64), total_postage, network, true);
+  let estRevealVSize = dummyRevealTransaction.extractTransaction().virtualSize();
+  return estRevealVSize;
 }
 
 function App() {
@@ -282,16 +322,17 @@ function App() {
   }
 
   const createInscriptionsWithTweakedKey = async (inscriptions) => {
-    // create dummy tx to get reveal vsize
-    let dummyPrivateKey = Buffer.from(await generatePrivateKey(NETWORKS[network].bitcoinjs)).toString('hex');
-    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
-
-    // get unsigned reveal transaction
+    // 1. get inscription tapscript
     let tweakedWalletTaproot = wallet.getTweakedTaproot(wallet, network);
-    let revealPublicKey = tweakedWalletTaproot.pubkey;
-    
-    let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
-    // get & sign commit transaction
+    let revealKeyPair = {
+      publicKey: tweakedWalletTaproot.pubkey,
+    }
+    let tapscriptData = getRevealTapscriptData(inscriptions, revealKeyPair.publicKey);
+
+    // 2. get estimated reveal vsize to work out how much commit tx should send to the reveal address
+    let estRevealVSize = getRevealVSize(inscriptions, wallet.ordinalsAddress, network);
+
+    // 3. get commit transaction
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
     let tempCommitTx = commitPsbt.__CACHE.__TX;
     let toSignCommitInputs = commitPsbt.data.inputs.map((input, index) => {
@@ -300,8 +341,11 @@ function App() {
         address: wallet.paymentAddress
       }
     });
-    // get and sign reveal transaction
-    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, tempCommitTx.getId(), estimatedRevealFee, network);
+
+    // 4. get reveal transaction
+    let unsignedRevealPsbt = getRevealTransactionV2(inscriptions, wallet.ordinalsAddress, tapscriptData, revealKeyPair, tempCommitTx.getId(), estimatedRevealFee, network, false);
+    
+    // 5. sign both transactions
     let [signedCommitPsbt, signedRevealPsbt] = await wallet.signPsbts(
       [commitPsbt, unsignedRevealPsbt],
       [
@@ -309,6 +353,8 @@ function App() {
         [{ index: 0, address: tweakedWalletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]
       ]
     );
+
+    // 6. broadcast transactions
     let commitTx = signedCommitPsbt.extractTransaction();
     let revealTx = signedRevealPsbt.extractTransaction();
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
@@ -317,16 +363,17 @@ function App() {
   }
 
   const createInscriptionsWithTweakedKeyTwoSign = async (inscriptions) => {
-    // create dummy tx to get reveal vsize
-    let dummyPrivateKey = Buffer.from(await generatePrivateKey(NETWORKS[network].bitcoinjs)).toString('hex');
-    let [dummyRevealTransaction, estRevealVSize] = getRevealTransaction(inscriptions, wallet.ordinalsAddress, dummyPrivateKey, "0".repeat(64), 0);
-
-    // get unsigned reveal transaction
+    // 1. get inscription tapscript
     let tweakedWalletTaproot = wallet.getTweakedTaproot(wallet, network);
-    let revealPublicKey = tweakedWalletTaproot.pubkey;
+    let revealKeyPair = {
+      publicKey: tweakedWalletTaproot.pubkey,
+    }
+    let tapscriptData = getRevealTapscriptData(inscriptions, revealKeyPair.publicKey);
+
+    // 2. get estimated reveal vsize to work out how much commit tx should send to the reveal address
+    let estRevealVSize = getRevealVSize(inscriptions, wallet.ordinalsAddress, network);
     
-    let tapscriptData = getRevealTapscriptData(inscriptions, revealPublicKey);
-    // get & sign commit transaction
+    // 3. get & sign commit transaction
     let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
     let toSignCommitInputs = commitPsbt.data.inputs.map((input, index) => {
       return {
@@ -336,16 +383,19 @@ function App() {
     });
     let signedCommitPsbt = await wallet.signPsbt(commitPsbt, toSignCommitInputs);
     let commitTx = signedCommitPsbt.extractTransaction();
-    // get and sign reveal transaction
-    let unsignedRevealPsbt = getUnsignedRevealTransaction(inscriptions, wallet.ordinalsAddress, tapscriptData, revealPublicKey, commitTx.getId(), estimatedRevealFee, network);
+
+    // 4. get and sign reveal transaction
+    let unsignedRevealPsbt = getRevealTransactionV2(inscriptions, wallet.ordinalsAddress, tapscriptData, revealKeyPair, commitTx.getId(), estimatedRevealFee, network, false);
     let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt, [{ index: 0, address: tweakedWalletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]);
     let revealTx = signedRevealPsbt.extractTransaction();
+
+    //5. broadcast transactions
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
     let pushedRevealTx = await broadcastTx(revealTx.toHex());
     console.log(pushedCommitTx, pushedRevealTx);
   }
 
-  const createInscriptionsWithEphemeralKey = async (inscriptions) => {
+  const createInscriptionsWithEphemeralKey_old = async (inscriptions) => {
     let revealPrivateKeyBuffer = await generatePrivateKey(NETWORKS[network].bitcoinjs);
     let revealPrivateKey = Buffer.from(revealPrivateKeyBuffer).toString('hex');
     let revealPublicKey = ecc.keys.get_pubkey(revealPrivateKey, true);
@@ -362,6 +412,30 @@ function App() {
     let pushedCommitTx = await broadcastTx(commitTx.toHex());
     //await new Promise(resolve => setTimeout(resolve, 2500));
     let pushedRevealTx = await broadcastTx(Tx.encode(revealTransaction).hex);
+    console.log(pushedCommitTx, pushedRevealTx);
+  }
+
+  const createInscriptionsWithEphemeralKey = async (inscriptions) => {
+    // 1. get inscription tapscript
+    let ephemeralKeyPair = generateKeyPair(NETWORKS[network].bitcoinjs);
+    let tapscriptData = getRevealTapscriptData(inscriptions, toXOnly(ephemeralKeyPair.publicKey));
+
+    // 2. get estimated reveal vsize to work out how much commit tx should send to the reveal address
+    let estRevealVSize = getRevealVSize(inscriptions, wallet.ordinalsAddress, network);
+
+    // 3. get & sign commit transaction
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, tapscriptData.tweakedPubkey, estRevealVSize);
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+
+    //4. get signed reveal transaction
+    let signedRevealPsbt = getRevealTransactionV2(inscriptions, wallet.ordinalsAddress, tapscriptData, ephemeralKeyPair, commitTxId, estimatedRevealFee, network, true);
+    let revealTx = signedRevealPsbt.extractTransaction();
+
+    //5. broadcast transactions
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    let pushedRevealTx = await broadcastTx(revealTx.toHex());
     console.log(pushedCommitTx, pushedRevealTx);
   }
 
@@ -433,35 +507,6 @@ function App() {
     let vSize = sizeData.vsize;
 
     return [txData, vSize];
-  }
-
-  const getRevealTransactionV2 = (inscriptions, inscriptionReceiveAddress, revealKeyPair, commitTxId, revealFee) => {
-    const pubkey = revealKeyPair.publicKey;
-    const script = getRevealScript(inscriptions, pubkey);
-    const tapleaf = Tap.encodeScript(script);
-    const [tpubkey, cblock] = Tap.getPubKey(pubkey, { target: tapleaf });
-    const tweakedTaproot = bitcoin.payments.p2tr({
-      internalKey: toXOnly(tpubkey),
-      network: NETWORKS[network].bitcoinjs
-    });
-
-    const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs })
-      .addInput({
-        hash: commitTxId,
-        index: 0,
-        witnessUtxo: {
-          script: tweakedTaproot.output,
-          value: revealFee,
-        },
-        tapLeafScript: [{
-          leafVersion: 192, // Tapscript leaf version (0xc0)
-          script: Buffer.from(Script.encode(script, false)), // Serialized Tapscript
-          controlBlock: Buffer.from(cblock, 'hex'), // Control block for script path
-        }]
-      })
-
-
-
   }
 
   const getCommitTransaction = async(inscriptions, paymentAddress, paymentPublicKey, tweakedRevealPublicKey, revealVSize) => {
