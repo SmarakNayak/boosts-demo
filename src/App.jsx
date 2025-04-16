@@ -110,8 +110,42 @@ class Inscription {
     script.push('OP_ENDIF');
     return script;
   }
-}
 
+  getInscriptionScript2() {
+    if (this.content !== null && this.content.length > 0 && !Buffer.isBuffer(this.content)) {
+      throw new Error("Content must be a Buffer");
+    }
+    const script = [bitcoin.opcodes.OP_0, bitcoin.opcodes.OP_IF, Buffer.from('ord', 'utf-8')];
+    if (this.contentType !== null) {
+      script.push(bitcoin.opcodes.OP_1, Buffer.from(this.contentType, 'utf-8'));
+    }
+    if (this.pointer !== null) {
+      script.push(bitcoin.opcodes.OP_2, intToLeBytes(this.pointer));
+    }
+    if (this.contentEncoding !== null) {
+      script.push(bitcoin.opcodes.OP_9, Buffer.from(this.contentEncoding, 'utf-8'));
+    }
+    if (this.metaprotocol !== null) {
+      script.push(bitcoin.opcodes.OP_7, Buffer.from(this.metaprotocol, 'utf-8'));
+    }
+    if (this.delegate !== null) {
+      script.push(bitcoin.opcodes.OP_11, getDelegateBytes(this.delegate));
+    }
+    if (this.metadata !== null) {
+      //script.push(bitcoin.opcodes.OP_5, Buffer.from(this.metadata));
+    }
+    if (this.content !== null && this.content.length > 0) {
+      script.push(bitcoin.opcodes.OP_0);
+      const contentChunks = [];
+      for (let i = 0; i < this.content.length; i += 520) {
+        contentChunks.push(this.content.subarray(i, i + 520));
+      }
+      script.push(...contentChunks);
+    }
+    script.push(bitcoin.opcodes.OP_ENDIF);
+    return script;
+  }
+}
 
 const getRevealScript = (inscriptions, revealPublicKey) => {
   let script = [revealPublicKey, 'OP_CHECKSIG'];
@@ -125,41 +159,33 @@ const getRevealScript = (inscriptions, revealPublicKey) => {
     script.push(...inscriptionScript);
     running_postage += inscription.postage;
   }
+  console.log("script1", script);
   return script;
+}
+
+function getRevealScript2(inscriptions, revealPublicKey) {
+  let script = [revealPublicKey, bitcoin.opcodes.OP_CHECKSIG];
+  let running_postage = 0;
+  for (let i = 0; i < inscriptions.length; i++) {
+    let inscription = inscriptions[i];
+    if (i>0) {
+      inscription.pointer = running_postage;
+    }
+    const inscriptionScript = inscription.getInscriptionScript2();
+    script.push(...inscriptionScript);
+    running_postage += inscription.postage;
+  }
+  console.log("script2", script);
+  const compiledScript = bitcoin.script.compile(script);
+  return compiledScript;
 }
 
 const getRevealTapscriptData = (inscriptions, revealPublicKey) => {
   const script = getRevealScript(inscriptions, revealPublicKey);
+  const script2 = getRevealScript2(inscriptions, revealPublicKey);
   const tapLeafHash = Tap.encodeScript(script); // sha256 hash of the script buffer in hex
   const [tweakedPubkey, cblock] = Tap.getPubKey(revealPublicKey, { target: tapLeafHash });  // tweak the public key using the tapleaf
   return {script, tapLeafHash, tweakedPubkey, cblock};
-}
-
-const getUnsignedRevealTransaction = (inscriptions, inscriptionReceiveAddress, tapscriptData, revealPublicKey, commitTxId, revealFee, network) => {
-  const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs });
-  let commitAddress = Address.p2tr.fromPubKey(tapscriptData.tweakedPubkey, network);
-
-  psbt.addInput({
-    hash: commitTxId,
-    index: 0,
-    witnessUtxo: {
-      script: bitcoin.address.toOutputScript(commitAddress, NETWORKS[network].bitcoinjs),
-      value: revealFee,
-    },
-    tapLeafScript: [{
-      leafVersion: 192, // Tapscript leaf version (0xc0)
-      script: Buffer.from(Script.encode(tapscriptData.script, false)), // Serialized Tapscript
-      controlBlock: Buffer.from(tapscriptData.cblock, 'hex'), // Control block for script path
-    }],
-    tapInternalKey: toXOnly(Buffer.from(revealPublicKey, 'hex')),
-  });
- 
-  psbt.addOutputs(inscriptions.map((inscription) => ({
-    address: inscriptionReceiveAddress,
-    value: inscription.postage,
-  })));
-
-  return psbt;
 }
 
 const getRevealTransactionV2 = (inscriptions, inscriptionReceiveAddress, tapscriptData, revealKeyPair, commitTxId, revealFee, network, sign=true) => {
@@ -263,7 +289,7 @@ function App() {
     let ec = new TextEncoder();
     let inscriptions = [
       new Inscription({
-        content: ec.encode("Chancellor on the brink of second bailout for banks"),
+        content: Buffer.from("Chancellor on the brink of second bailout for banks"),
         contentType: "text/plain"
       }),
     ];
