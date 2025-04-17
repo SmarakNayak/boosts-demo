@@ -180,6 +180,56 @@ const getRevealVSize = (inscriptions, inscriptionReceiveAddress, network) => {
   return estRevealVSize;
 }
 
+function getRevealSweepTransaction(receiveAddress, revealTaproot, revealKeyPair, commitTxId, revealFee, network) {
+  const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs })
+    .addInput({
+      hash: commitTxId,
+      index: 0,
+      witnessUtxo: {
+        script: revealTaproot.output,
+        value: revealFee,
+      },
+      tapInternalKey: toXOnly(revealKeyPair.publicKey),
+      tapMerkleRoot: revealTaproot.hash,
+    })
+    .addOutput({
+      address: receiveAddress,
+      value: revealFee-150,
+    });
+  
+  const tweakedSigner = revealKeyPair.tweak(
+    bitcoin.crypto.taggedHash(
+      'TapTweak',
+      Buffer.concat([toXOnly(revealKeyPair.publicKey), revealTaproot.hash]),
+    ),
+  );
+
+  psbt.signInput(0, wrapECPairWithBufferPublicKey(tweakedSigner));
+  psbt.finalizeAllInputs();
+  return psbt;
+
+}
+
+function getRevealSweepTransaction2(receiveAddress, revealTaproot, revealKeyPair, commitTxId, revealFee, network) {
+  const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs })
+    .addInput({
+      hash: commitTxId,
+      index: 0,
+      witnessUtxo: {
+        script: revealTaproot.output,
+        value: revealFee,
+      },
+      tapInternalKey: toXOnly(revealKeyPair.publicKey),
+      tapMerkleRoot: revealTaproot.hash,
+    })
+    .addOutput({
+      address: receiveAddress,
+      value: revealFee-150,
+    });
+
+  return psbt;
+}
+
 function App() {
   const [network, setNetwork] = useState('testnet');
   const [wallet, setWallet] = useState(null);
@@ -477,6 +527,90 @@ function App() {
 
   }
 
+  const createTestInscriptions = async () => {
+    let inscriptions = [
+      new Inscription({
+        content: Buffer.from("Chancellor on the brink of second bailout for banks"),
+        contentType: "text/plain"
+      }),
+    ];
+
+    // 1. get inscription tapscript
+    let ephemeralKeyPair = generateKeyPair(NETWORKS[network].bitcoinjs);
+    let revealTaproot = getRevealTaproot(inscriptions, toXOnly(ephemeralKeyPair.publicKey), network);
+
+    // 2. get estimated reveal vsize to work out how much commit tx should send to the reveal address
+    let estRevealVSize = getRevealVSize(inscriptions, wallet.ordinalsAddress, network);
+
+    // 3. get & sign commit transaction
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, revealTaproot.address, estRevealVSize);
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+
+    //4. get reveal sweep transaction
+    let sweepPsbt = getRevealSweepTransaction(wallet.paymentAddress, revealTaproot, ephemeralKeyPair, commitTxId, estimatedRevealFee, network, true);
+    let revealTx = sweepPsbt.extractTransaction();
+
+    //5. broadcast transactions
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    let pushedRevealTx = await broadcastTx(revealTx.toHex());
+    console.log(pushedCommitTx, pushedRevealTx);
+  
+  }
+
+  const createTestInscriptions2 = async () => {
+    let inscriptions = [
+      new Inscription({
+        content: Buffer.from("Chancellor on the brink of second bailout for banks"),
+        contentType: "text/plain"
+      }),
+    ];
+
+    // 1. get inscription tapscript
+    let walletInternalKey = toXOnly(Buffer.from(wallet.ordinalsPublicKey, 'hex'));
+    console.log(walletInternalKey.toString('hex'));
+    console.log(wallet.getTweakedTaproot(wallet, network).pubkey.toString('hex'));
+    let revealKeyPair = {
+      publicKey: wallet.getTweakedTaproot(wallet, network).pubkey,
+      //publicKey: walletInternalKey,
+    }
+    let revealTaproot = getRevealTaproot(inscriptions, toXOnly(revealKeyPair.publicKey), network);
+
+    // 2. get estimated reveal vsize to work out how much commit tx should send to the reveal address
+    let estRevealVSize = getRevealVSize(inscriptions, wallet.ordinalsAddress, network);
+
+    // 3. get & sign commit transaction
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, revealTaproot.address, estRevealVSize);
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt, [{ index: 0, address: wallet.paymentAddress }]); 
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+
+    //4. get reveal sweep transaction
+    let sweepPsbt = getRevealSweepTransaction2(wallet.paymentAddress, revealTaproot, revealKeyPair, commitTxId, estimatedRevealFee, network, true);
+    let signedSweepPsbt = await wallet.signPsbt(sweepPsbt, [
+      { index: 0, 
+        address: wallet.ordinalsAddress,
+        // disableTweakSigner: true,
+        // publicKey: wallet.ordinalsPublicKey,
+        // useTweakSigner: true, 
+        // useTweakedSigner: true,
+        useTweakSigner: false,
+        useTweakedSigner: false,
+        // tweakHash: revealTaproot.hash,
+        // tapMerkleRoot: revealTaproot.hash, 
+        // tapLeafHashToSign: revealTaproot.hash 
+      }
+    ]);
+    let revealTx = signedSweepPsbt.extractTransaction();
+
+    //5. broadcast transactions
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    let pushedRevealTx = await broadcastTx(revealTx.toHex());
+    console.log(pushedCommitTx, pushedRevealTx);
+  
+  }
+
   async function broadcastTx(txHex) {
     const url = `https://mempool.space/${NETWORKS[network].mempool}api/tx`;
   
@@ -707,7 +841,7 @@ function App() {
           
           <button onClick={() => createInscriptions()}>Create Inscription</button>
           <button onClick={() => disconnectWallet()}>Disconnect Wallet</button>
-          <button onClick={() => createTestInscriptions()}>Create Test Inscription</button>
+          <button onClick={() => createTestInscriptions2()}>Create Test Inscription</button>
         </div>
       )}
 

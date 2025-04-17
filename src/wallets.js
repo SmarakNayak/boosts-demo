@@ -214,16 +214,24 @@ class UnisatWallet extends Wallet {
     this.network = network;
   }
 
-  async signPsbt(psbt) {
+  async signPsbt(psbt, signingIndexes = null) {
     this.windowCheck();
     const psbtHex = psbt.toHex();
-    const signedPsbtHex = await window.unisat.signPsbt(psbtHex);
+    let signedPsbtHex;
+    if (signingIndexes === null) {
+      signedPsbtHex = await window.unisat.signPsbt(psbtHex);
+    } else {
+      let unisatOptions = {
+        autoFinalized: true,
+        toSignInputs: signingIndexes
+      }
+      signedPsbtHex = await window.unisat.signPsbt(psbtHex, unisatOptions);
+    }
     return bitcoin.Psbt.fromHex(signedPsbtHex);
   }
 
   async signPsbts(psbtArray, signingIndexesArray) {
     this.windowCheck();
-    console.log('unisgned revealPSBT:', psbtArray[1].toBase64());
     const psbtHexs = psbtArray.map(psbt => psbt.toHex());
     const unisatOptions = signingIndexesArray.map(signingIndexes => ({
       toSignInputs: signingIndexes,
@@ -231,9 +239,7 @@ class UnisatWallet extends Wallet {
     }));
     const signedPsbtHexs = await window.unisat.signPsbts(psbtHexs, unisatOptions);
     const psbts = signedPsbtHexs.map(hex => bitcoin.Psbt.fromHex(hex));
-    console.log('Signed revealPSBT:', psbts[1].toBase64());
     const finalizedPsbts = psbts.map(psbt => psbt.finalizeAllInputs());
-    console.log('Finalized revealPSBT:', finalizedPsbts[1].toBase64());
     return finalizedPsbts;
   }
 
@@ -465,10 +471,19 @@ class OkxWallet extends Wallet {
     await this.connect(network);
   }
 
-  async signPsbt(psbt) {
+  async signPsbt(psbt, signingIndexes = null) {
     this.windowCheck();
     const provider = this.network === 'mainnet' ? window.okxwallet.bitcoin : window.okxwallet.bitcoinTestnet;
-    const signedPsbtHex = await provider.signPsbt(psbt.toHex());
+    let signedPsbtHex;
+    if (signingIndexes === null) {
+      signedPsbtHex = await provider.signPsbt(psbt.toHex());
+    } else {
+      let okxOptions = {
+        autoFinalized: true,
+        toSignInputs: signingIndexes
+      }
+      signedPsbtHex = await provider.signPsbt(psbt.toHex(), okxOptions);
+    }
     return bitcoin.Psbt.fromHex(signedPsbtHex);
   }
 
