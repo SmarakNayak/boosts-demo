@@ -572,8 +572,8 @@ function App() {
     console.log(walletInternalKey.toString('hex'));
     console.log(wallet.getTweakedTaproot(wallet, network).pubkey.toString('hex'));
     let revealKeyPair = {
-      publicKey: wallet.getTweakedTaproot(wallet, network).pubkey,
-      //publicKey: walletInternalKey,
+      //publicKey: wallet.getTweakedTaproot(wallet, network).pubkey,
+      publicKey: walletInternalKey,
     }
     let revealTaproot = getRevealTaproot(inscriptions, toXOnly(revealKeyPair.publicKey), network);
 
@@ -591,12 +591,13 @@ function App() {
     let signedSweepPsbt = await wallet.signPsbt(sweepPsbt, [
       { index: 0, 
         address: wallet.ordinalsAddress,
+        publicKey: wallet.ordinalsPublicKey,
         // disableTweakSigner: true,
         // publicKey: wallet.ordinalsPublicKey,
         // useTweakSigner: true, 
         // useTweakedSigner: true,
-        useTweakSigner: false,
-        useTweakedSigner: false,
+        // useTweakSigner: false,
+        // useTweakedSigner: false,
         // tweakHash: revealTaproot.hash,
         // tapMerkleRoot: revealTaproot.hash, 
         // tapLeafHashToSign: revealTaproot.hash 
