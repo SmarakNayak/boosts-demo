@@ -292,7 +292,7 @@ class XverseWallet extends Wallet {
     const payment = accounts.find(a => a.purpose === 'payment');
     const ordinals = accounts.find(a => a.purpose === 'ordinals');
 
-    if (this.getNetwork() !== NETWORKS[network].xverse) {
+    if (await this.getNetwork() !== NETWORKS[network].xverse) {
       throw new Error('Connected to wrong network, please switch to ' + network);
     }
     
