@@ -9,9 +9,12 @@ import * as jsontokens from 'jsontokens';
 import { NETWORKS, getNetworkFromAddress } from './networks';
 
 class Wallet {
-  constructor(walletType, supportsTweakSigning = false) {
+  constructor(walletType, supportsCustomAddressSigning = false, supportsKeyPathSigning = false) {
     this.walletType = walletType;
-    this.supportsTweakSigning = supportsTweakSigning;
+    // allows for signing of any custom p2tr address even if not the standard p2tr
+    this.supportsCustomAddressSigning = supportsCustomAddressSigning;
+    // allows for signing of custom p2tr addresses with internal key tweaked by merkle root of p2tr script
+    this.supportsKeyPathSigning = supportsKeyPathSigning;
     this.network = null;
     this.paymentAddress = null;
     this.ordinalsAddress = null;
@@ -122,7 +125,7 @@ class Wallet {
   }
 
   hasSignableTweakedTaproot() {
-    if (!this.supportsTweakSigning) return false;
+    if (!this.supportsCustomAddressSigning) return false;
     const paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
     const ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
     return isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript);
@@ -131,13 +134,14 @@ class Wallet {
   getInscriptionCreationMethod() {
     const paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
     const ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
-    // need tweak signing + taproot address + p2wpkh or p2tr for tweaked one sign
-    // need tweak signing + taproot address for tweaked two sign
-    // otherwise ephemeral key
-    if (!this.supportsTweakSigning) return 'ephemeral_key';
-    if (!(isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript))) return 'ephemeral_key';
-    if (isP2TR(paymentAddressScript) || isP2WPKH(paymentAddressScript)) return 'tweaked_key_one_sign';
-    return 'tweaked_key_two_sign';
+    // no taproot so we have to use an ephemeral key (non-custodial)
+    if (!(isP2TR(paymentAddressScript) || isP2TR(ordinalsAddressScript))) return 'ephemeral';
+    // has taproot but can't sign reveal, so sign using ephemeral script path, whilst maintaining custody via wallet key path
+    if (!this.supportsCustomAddressSigning) return 'ephemeral_with_wallet_key_path';
+    // has taproot and can sign reveal, payment address is p2wpkh/p2tr, so we can extract commit tx_id and sign both txs at once
+    if (isP2TR(paymentAddressScript) || isP2WPKH(paymentAddressScript)) return 'wallet_one_sign';
+    // has taproot and can sign reveal, but legacy/nested payment address, so we can't extract commit tx_id before signing
+    return 'wallet_two_sign';
   }
 
   getTweakedTaproot() {
@@ -173,7 +177,7 @@ class Wallet {
 
 class UnisatWallet extends Wallet {
   constructor() {
-    super('unisat', true);
+    super('unisat', true, false); //supports custom addresses, but not custom key path signing
   }
 
   windowCheck() {
@@ -271,7 +275,7 @@ class UnisatWallet extends Wallet {
 
 class XverseWallet extends Wallet {
   constructor() {
-    super('xverse', true);
+    super('xverse', true, true); //supports custom addresses and custom key path signing
   }
 
   windowCheck() {
@@ -287,9 +291,9 @@ class XverseWallet extends Wallet {
     const accounts = response.result.addresses;
     const payment = accounts.find(a => a.purpose === 'payment');
     const ordinals = accounts.find(a => a.purpose === 'ordinals');
-    
-    if (getNetworkFromAddress(payment.address) !== network) {
-      throw new Error('Connected to wrong network');
+
+    if (this.getNetwork() !== NETWORKS[network].xverse) {
+      throw new Error('Connected to wrong network, please switch to ' + network);
     }
     
     this.network = network;
@@ -384,7 +388,7 @@ class XverseWallet extends Wallet {
 
 class LeatherWallet extends Wallet {
   constructor() {
-    super('leather', false); // Error: Can not finalize taproot input #0. No tapleaf script signature provided.
+    super('leather', false, false); // Error: Can not finalize taproot input #0. No tapleaf script signature provided.
   }
 
   windowCheck() {
@@ -397,8 +401,8 @@ class LeatherWallet extends Wallet {
     const payment = response.result.addresses.find(a => a.type === 'p2wpkh');
     const ordinals = response.result.addresses.find(a => a.type === 'p2tr');
     
-    if (getNetworkFromAddress(payment.address) !== network) {
-      throw new Error('Connected to wrong network');
+    if (!getNetworkFromAddress(payment.address).includes(network)) {
+      throw new Error('Connected to wrong network, please switch to ' + network);
     }
     
     this.network = network;
@@ -434,7 +438,8 @@ class LeatherWallet extends Wallet {
 
 class OkxWallet extends Wallet {
   constructor() {
-    super('okx', true);
+    super('okx', true, true); //supports custom addresses and custom key path signing
+    this._provider = null;
   }
 
   windowCheck() {
@@ -445,12 +450,16 @@ class OkxWallet extends Wallet {
     this.windowCheck();
     let response;
     if (network === 'mainnet') {
-      response = await window.okxwallet.bitcoin.connect();
+      this._provider = window.okxwallet.bitcoin;
     } else if (network === 'testnet') {
-      response = await window.okxwallet.bitcoinTestnet.connect();
-    } else {
-      throw new Error('OKX only supports mainnet and testnet');
+      this._provider = window.okxwallet.bitcoinTestnet.connect();
+    } else if (network === 'signet') {
+      this._provider = window.okxwallet.bitcoinSignet.connect();
+    }  else {
+      throw new Error('OKX only supports mainnet, testnet and signet');
     }
+
+    response = await this._provider.connect();
     
     this.network = network;
     this.paymentAddress = response.address;
@@ -473,7 +482,7 @@ class OkxWallet extends Wallet {
 
   async signPsbt(psbt, signingIndexes = null) {
     this.windowCheck();
-    const provider = this.network === 'mainnet' ? window.okxwallet.bitcoin : window.okxwallet.bitcoinTestnet;
+    const provider = this._provider;
     let signedPsbtHex;
     if (signingIndexes === null) {
       signedPsbtHex = await provider.signPsbt(psbt.toHex());
@@ -489,7 +498,7 @@ class OkxWallet extends Wallet {
 
   async signPsbts(psbtArray, signingIndexesArray) {
     this.windowCheck();
-    const provider = this.network === 'mainnet' ? window.okxwallet.bitcoin : window.okxwallet.bitcoinTestnet;
+    const provider = this._provider;
     const psbtHexs = psbtArray.map(psbt => psbt.toHex());
     const options = signingIndexesArray.map(signingIndexes => ({
       toSignInputs: signingIndexes,
@@ -512,14 +521,14 @@ class OkxWallet extends Wallet {
       this.ordinalsPublicKey = addressInfo.publicKey;
       callback(this.getAccountInfo());
     };
-    const provider = this.network === 'mainnet' ? window.okxwallet.bitcoin : window.okxwallet.bitcoinTestnet;
+    const provider = this._provider;
     provider.on('accountChanged', this._accountChangedListener);
   }
 
   async removeAccountChangeListener() {
     this.windowCheck();
     if (this._accountChangedListener) {
-      const provider = this.network === 'mainnet' ? window.okxwallet.bitcoin : window.okxwallet.bitcoinTestnet;
+      const provider = this._provider;
       provider.removeListener('accountChanged', this._accountChangedListener);
       this._accountChangedListener = null;
     }
@@ -528,7 +537,7 @@ class OkxWallet extends Wallet {
 
 class MagicEdenWallet extends Wallet {
   constructor() {
-    super('magiceden', true);
+    super('magiceden', true, true); //assumed, need to check on mainnet
   }
 
   windowCheck() {
@@ -604,7 +613,7 @@ class MagicEdenWallet extends Wallet {
 
 class PhantomWallet extends Wallet {
   constructor() {
-    super('phantom', true);
+    super('phantom', true, true); //Assumed, need to check on mainnet
   }
 
   windowCheck() {
@@ -677,7 +686,7 @@ class PhantomWallet extends Wallet {
 
 class OylWallet extends Wallet {
   constructor() {
-    super('oyl', true);
+    super('oyl', false, false); //does not support signing custom addresses nor key path signing
   }
 
   windowCheck() {
@@ -686,7 +695,7 @@ class OylWallet extends Wallet {
 
   async connect(network) {
     this.windowCheck();
-    if (network !== 'mainnet') throw new Error('Oyl only supports mainnet');
+    if (network !== 'mainnet' && network !== 'signet') throw new Error('Oyl only supports mainnet and signet');
     this.network = network;
     const accounts = await window.oyl.getAddresses();
     this.paymentAddress = accounts.nativeSegwit.address;

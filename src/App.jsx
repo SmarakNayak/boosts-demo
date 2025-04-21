@@ -123,19 +123,18 @@ function getRevealScript(inscriptions, revealPublicKey) {
     script.push(...inscriptionScript);
     running_postage += inscription.postage;
   }
-  console.log("script2", script);
   const compiledScript = bitcoin.script.compile(script);
   return compiledScript;
 }
 
-function getRevealTaproot(inscriptions, revealPublicKey, network) {
-  const script = getRevealScript(inscriptions, revealPublicKey);
+function getRevealTaproot(inscriptions, scriptPathPublicKey, network, keyPathInternalKey=scriptPathPublicKey) {
+  const script = getRevealScript(inscriptions, scriptPathPublicKey);
   const tapLeaf = {
     leafVersion: 192, // Tapscript leaf version (0xc0)
     output: script, // Serialized Tapscript
   }
   const revealTaproot = bitcoin.payments.p2tr({
-    internalPubkey: revealPublicKey,
+    internalPubkey: keyPathInternalKey,
     scriptTree: tapLeaf,
     redeem: tapLeaf,
     network: NETWORKS[network].bitcoinjs
@@ -157,7 +156,7 @@ const getRevealTransaction = (inscriptions, inscriptionReceiveAddress, revealTap
         script: revealTaproot.redeem.output, // Serialized Tapscript
         controlBlock: revealTaproot.witness[revealTaproot.witness.length - 1], // Control block for script path
       }],
-      tapInternalKey: toXOnly(revealKeyPair.publicKey), //do we need this?
+      //tapInternalKey: toXOnly(revealKeyPair.publicKey), //do we need this?
     })
     .addOutputs(inscriptions.map((inscription) => ({
       address: inscriptionReceiveAddress,
@@ -231,7 +230,7 @@ function getRevealSweepTransaction2(receiveAddress, revealTaproot, revealKeyPair
 }
 
 function App() {
-  const [network, setNetwork] = useState('testnet');
+  const [network, setNetwork] = useState('signet');
   const [wallet, setWallet] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -316,19 +315,24 @@ function App() {
     // );
     
     let creationMethod = wallet.getInscriptionCreationMethod();
-    if (creationMethod === 'ephemeral_key') {
+    if (creationMethod === 'ephemeral') {
       //using ephemeral key
-      console.log("Using ephemeral key");
-      createInscriptionsWithEphemeralKey(inscriptions);
+      console.log("Using ephemeral key for script and key path");
+      createInscriptionsWithEphemeralKey(inscriptions, false);
     }
-    if (creationMethod === 'tweaked_key_one_sign') {
-      //using tweaked key
-      console.log("Using tweaked key");
+    if (creationMethod === 'ephemeral_with_wallet_key_path') {
+      //using ephemeral key for script path, wallet for key path
+      console.log("Using ephemeral key for script path, wallet for key path");
+      createInscriptionsWithEphemeralKey(inscriptions, true);
+    }
+    if (creationMethod === 'wallet_one_sign') {
+      //using wallet internal key
+      console.log("Using internal key");
       createInscriptionsWithTweakedKey(inscriptions);
     }
-    if (creationMethod === 'tweaked_key_two_sign') {
-      //using tweaked key with two signers
-      console.log("Using tweaked key with two signers");
+    if (creationMethod === 'wallet_two_sign') {
+      //using wallet internal key with two txs
+      console.log("Using internal key with two txs");
       createInscriptionsWithTweakedKeyTwoSign(inscriptions);
     }
   }
@@ -407,10 +411,16 @@ function App() {
     console.log(pushedCommitTx, pushedRevealTx);
   }
 
-  const createInscriptionsWithEphemeralKey = async (inscriptions) => {
+  const createInscriptionsWithEphemeralKey = async (inscriptions, useWalletForKeyPath=false) => {
     // 1. get inscription tapscript
     let ephemeralKeyPair = generateKeyPair(NETWORKS[network].bitcoinjs);
-    let revealTaproot = getRevealTaproot(inscriptions, toXOnly(ephemeralKeyPair.publicKey), network);
+
+    let scriptPathPublicKey = toXOnly(ephemeralKeyPair.publicKey);
+    let keyPathInternalKey = scriptPathPublicKey;
+    if (useWalletForKeyPath) {
+      keyPathInternalKey = wallet.getTweakedTaproot(wallet, network).internalPubkey;
+    }
+    let revealTaproot = getRevealTaproot(inscriptions, scriptPathPublicKey, network, keyPathInternalKey);
 
     // 2. get estimated reveal vsize to work out how much commit tx should send to the reveal address
     let estRevealVSize = getRevealVSize(inscriptions, wallet.ordinalsAddress, network);
