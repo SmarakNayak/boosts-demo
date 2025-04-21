@@ -179,7 +179,7 @@ const getRevealVSize = (inscriptions, inscriptionReceiveAddress, network) => {
   return estRevealVSize;
 }
 
-function getRevealSweepTransaction(receiveAddress, revealTaproot, revealKeyPair, commitTxId, revealFee, network) {
+function getRevealSweepTransaction(receiveAddress, revealTaproot, revealKeyPair, commitTxId, revealFee, network, sign=true) {
   const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs })
     .addInput({
       hash: commitTxId,
@@ -196,41 +196,22 @@ function getRevealSweepTransaction(receiveAddress, revealTaproot, revealKeyPair,
       value: revealFee-150,
     });
   
-  const tweakedSigner = revealKeyPair.tweak(
-    bitcoin.crypto.taggedHash(
-      'TapTweak',
-      Buffer.concat([toXOnly(revealKeyPair.publicKey), revealTaproot.hash]),
-    ),
-  );
-
-  psbt.signInput(0, wrapECPairWithBufferPublicKey(tweakedSigner));
-  psbt.finalizeAllInputs();
-  return psbt;
-
-}
-
-function getRevealSweepTransaction2(receiveAddress, revealTaproot, revealKeyPair, commitTxId, revealFee, network) {
-  const psbt = new bitcoin.Psbt({ network: NETWORKS[network].bitcoinjs })
-    .addInput({
-      hash: commitTxId,
-      index: 0,
-      witnessUtxo: {
-        script: revealTaproot.output,
-        value: revealFee,
-      },
-      tapInternalKey: toXOnly(revealKeyPair.publicKey),
-      tapMerkleRoot: revealTaproot.hash,
-    })
-    .addOutput({
-      address: receiveAddress,
-      value: revealFee-150,
-    });
+  if (sign) {
+    const tweakedSigner = revealKeyPair.tweak(
+      bitcoin.crypto.taggedHash(
+        'TapTweak',
+        Buffer.concat([toXOnly(revealKeyPair.publicKey), revealTaproot.hash]),
+      ),
+    );
+    psbt.signInput(0, wrapECPairWithBufferPublicKey(tweakedSigner));
+    psbt.finalizeAllInputs();
+  }
 
   return psbt;
 }
 
 function App() {
-  const [network, setNetwork] = useState('signet');
+  const [network, setNetwork] = useState('testnet');
   const [wallet, setWallet] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -285,7 +266,6 @@ function App() {
   }
 
   const createInscriptions = async () => {
-    let ec = new TextEncoder();
     let inscriptions = [
       new Inscription({
         content: Buffer.from("Chancellor on the brink of second bailout for banks"),
@@ -294,15 +274,15 @@ function App() {
     ];
     // let inscriptions = [
     //   new Inscription({
-    //     content: ec.encode("Chancellor on the brink of second bailout for banks"),
+    //     content: Buffer.from("Chancellor on the brink of second bailout for banks"),
     //     contentType: "text/plain;charset=utf-8"
     //   }),
     //   new Inscription({
-    //     content: ec.encode("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
+    //     content: Buffer.from("Chancellor on the brink of second bailout for banks: Billions may be needed as lending squeeze tightens"),
     //     contentType: "text/plain;charset=utf-8"
     //   }),
     //   new Inscription({
-    //     content: ec.encode("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
+    //     content: Buffer.from("The Times 03/Jan/2009 Chancellor on the brink of second bailout for banks."),
     //     contentType: "text/plain;charset=utf-8"
     //   }),
     // ];
@@ -339,9 +319,9 @@ function App() {
 
   const createInscriptionsWithTweakedKey = async (inscriptions) => {
     // 1. get inscription tapscript
-    let tweakedWalletTaproot = wallet.getTweakedTaproot(wallet, network);
+    let walletTaproot = wallet.getTaproot(wallet, network);
     let revealKeyPair = {
-      publicKey: tweakedWalletTaproot.pubkey,
+      publicKey: walletTaproot.pubkey,
     }
     let revealTaproot = getRevealTaproot(inscriptions, revealKeyPair.publicKey, network);
 
@@ -366,7 +346,7 @@ function App() {
       [commitPsbt, unsignedRevealPsbt],
       [
         toSignCommitInputs,
-        [{ index: 0, address: tweakedWalletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]
+        [{ index: 0, address: walletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]
       ]
     );
 
@@ -380,9 +360,9 @@ function App() {
 
   const createInscriptionsWithTweakedKeyTwoSign = async (inscriptions) => {
     // 1. get inscription tapscript
-    let tweakedWalletTaproot = wallet.getTweakedTaproot(wallet, network);
+    let walletTaproot = wallet.getTaproot(wallet, network);
     let revealKeyPair = {
-      publicKey: tweakedWalletTaproot.pubkey,
+      publicKey: walletTaproot.pubkey,
     }
     let revealTaproot = getRevealTaproot(inscriptions, revealKeyPair.publicKey, network);
 
@@ -402,7 +382,7 @@ function App() {
 
     // 4. get and sign reveal transaction
     let unsignedRevealPsbt = getRevealTransaction(inscriptions, wallet.ordinalsAddress, revealTaproot, revealKeyPair, commitTx.getId(), estimatedRevealFee, network, false);
-    let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt, [{ index: 0, address: tweakedWalletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]);
+    let signedRevealPsbt = await wallet.signPsbt(unsignedRevealPsbt, [{ index: 0, address: walletTaproot.address, useTweakSigner: true, useTweakedSigner: true }]);
     let revealTx = signedRevealPsbt.extractTransaction();
 
     //5. broadcast transactions
@@ -418,7 +398,7 @@ function App() {
     let scriptPathPublicKey = toXOnly(ephemeralKeyPair.publicKey);
     let keyPathInternalKey = scriptPathPublicKey;
     if (useWalletForKeyPath) {
-      keyPathInternalKey = wallet.getTweakedTaproot(wallet, network).internalPubkey;
+      keyPathInternalKey = wallet.getTaproot(wallet, network).internalPubkey;
     }
     let revealTaproot = getRevealTaproot(inscriptions, scriptPathPublicKey, network, keyPathInternalKey);
 
@@ -579,10 +559,7 @@ function App() {
 
     // 1. get inscription tapscript
     let walletInternalKey = toXOnly(Buffer.from(wallet.ordinalsPublicKey, 'hex'));
-    console.log(walletInternalKey.toString('hex'));
-    console.log(wallet.getTweakedTaproot(wallet, network).pubkey.toString('hex'));
     let revealKeyPair = {
-      //publicKey: wallet.getTweakedTaproot(wallet, network).pubkey,
       publicKey: walletInternalKey,
     }
     let revealTaproot = getRevealTaproot(inscriptions, toXOnly(revealKeyPair.publicKey), network);
@@ -597,7 +574,7 @@ function App() {
     let commitTxId = commitTx.getId();
 
     //4. get reveal sweep transaction
-    let sweepPsbt = getRevealSweepTransaction2(wallet.paymentAddress, revealTaproot, revealKeyPair, commitTxId, estimatedRevealFee, network, true);
+    let sweepPsbt = getRevealSweepTransaction(wallet.paymentAddress, revealTaproot, revealKeyPair, commitTxId, estimatedRevealFee, network, false);
     let signedSweepPsbt = await wallet.signPsbt(sweepPsbt, [
       { index: 0, 
         address: wallet.ordinalsAddress,
@@ -611,6 +588,47 @@ function App() {
         // tweakHash: revealTaproot.hash,
         // tapMerkleRoot: revealTaproot.hash, 
         // tapLeafHashToSign: revealTaproot.hash 
+      }
+    ]);
+    let revealTx = signedSweepPsbt.extractTransaction();
+
+    //5. broadcast transactions
+    let pushedCommitTx = await broadcastTx(commitTx.toHex());
+    let pushedRevealTx = await broadcastTx(revealTx.toHex());
+    console.log(pushedCommitTx, pushedRevealTx);
+  
+  }
+
+  const createTestInscriptions3 = async () => {
+    let inscriptions = [
+      new Inscription({
+        content: Buffer.from("Chancellor on the brink of second bailout for banks"),
+        contentType: "text/plain"
+      }),
+    ];
+
+    // 1. get inscription tapscript
+    let walletTaproot = wallet.getTaproot(wallet, network);
+    let walletInternalKeyPair = {
+      publicKey: walletTaproot.internalPubkey,
+    }
+    let ephemeralKeyPair = generateKeyPair(NETWORKS[network].bitcoinjs);
+    let revealTaproot = getRevealTaproot(inscriptions, toXOnly(ephemeralKeyPair.publicKey), network, walletTaproot.internalPubkey);
+
+    // 2. get estimated reveal vsize to work out how much commit tx should send to the reveal address
+    let estRevealVSize = getRevealVSize(inscriptions, wallet.ordinalsAddress, network);
+
+    // 3. get & sign commit transaction
+    let [commitPsbt, estimatedRevealFee ]= await getCommitTransaction(inscriptions, wallet.paymentAddress, wallet.paymentPublicKey, revealTaproot.address, estRevealVSize);
+    let signedCommitPsbt = await wallet.signPsbt(commitPsbt); 
+    let commitTx = signedCommitPsbt.extractTransaction();
+    let commitTxId = commitTx.getId();
+
+    //4. get reveal sweep transaction
+    let sweepPsbt = getRevealSweepTransaction(wallet.paymentAddress, revealTaproot, walletInternalKeyPair, commitTxId, estimatedRevealFee, network, false);
+    let signedSweepPsbt = await wallet.signPsbt(sweepPsbt, [
+      { index: 0, 
+        address: wallet.ordinalsAddress,
       }
     ]);
     let revealTx = signedSweepPsbt.extractTransaction();
@@ -852,7 +870,7 @@ function App() {
           
           <button onClick={() => createInscriptions()}>Create Inscription</button>
           <button onClick={() => disconnectWallet()}>Disconnect Wallet</button>
-          <button onClick={() => createTestInscriptions2()}>Create Test Inscription</button>
+          <button onClick={() => createTestInscriptions3()}>Create Test Inscription</button>
         </div>
       )}
 
@@ -901,4 +919,3 @@ export default App
 //TODO: Sweep tweaked address
 //TODO: Add mobile wallet support
 //TODO: Add hardware wallet support
-//TODO: Add signet support

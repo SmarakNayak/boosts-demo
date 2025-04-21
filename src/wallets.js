@@ -144,7 +144,7 @@ class Wallet {
     return 'wallet_two_sign';
   }
 
-  getTweakedTaproot() {
+  getTaproot() {
     let paymentAddressScript = bitcoin.address.toOutputScript(this.paymentAddress, NETWORKS[this.network].bitcoinjs);
     let ordinalsAddressScript = bitcoin.address.toOutputScript(this.ordinalsAddress, NETWORKS[this.network].bitcoinjs);
     if (isP2TR(ordinalsAddressScript)) {
@@ -452,9 +452,9 @@ class OkxWallet extends Wallet {
     if (network === 'mainnet') {
       this._provider = window.okxwallet.bitcoin;
     } else if (network === 'testnet') {
-      this._provider = window.okxwallet.bitcoinTestnet.connect();
+      this._provider = window.okxwallet.bitcoinTestnet;
     } else if (network === 'signet') {
-      this._provider = window.okxwallet.bitcoinSignet.connect();
+      this._provider = window.okxwallet.bitcoinSignet;
     }  else {
       throw new Error('OKX only supports mainnet, testnet and signet');
     }
