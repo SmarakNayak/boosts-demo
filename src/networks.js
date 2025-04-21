@@ -27,7 +27,7 @@ export const NETWORKS = {
   },
 }
 
-export function getNetworkFromAddress(address) {
+export function getNetworksFromAddress(address) {
   try {
     // Try to decode as testnet/signet
     bitcoin.address.toOutputScript(address, bitcoin.networks.testnet);

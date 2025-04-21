@@ -6,7 +6,7 @@ import * as bitcoin from 'bitcoinjs-lib';
 import { isP2PKH, isP2SHScript, isP2WPKH, isP2TR } from 'bitcoinjs-lib/src/psbt/psbtutils';
 import { toXOnly } from 'bitcoinjs-lib/src/psbt/bip371';
 import * as jsontokens from 'jsontokens';
-import { NETWORKS, getNetworkFromAddress } from './networks';
+import { NETWORKS, getNetworksFromAddress } from './networks';
 
 class Wallet {
   constructor(walletType, supportsCustomAddressSigning = false, supportsKeyPathSigning = false) {
@@ -401,7 +401,7 @@ class LeatherWallet extends Wallet {
     const payment = response.result.addresses.find(a => a.type === 'p2wpkh');
     const ordinals = response.result.addresses.find(a => a.type === 'p2tr');
     
-    if (!getNetworkFromAddress(payment.address).includes(network)) {
+    if (!getNetworksFromAddress(payment.address).includes(network)) {
       throw new Error('Connected to wrong network, please switch to ' + network);
     }
     
@@ -695,7 +695,9 @@ class OylWallet extends Wallet {
 
   async connect(network) {
     this.windowCheck();
-    if (network !== 'mainnet' && network !== 'signet') throw new Error('Oyl only supports mainnet and signet');
+    if (!getNetworksFromAddress(payment.address).includes(network)) {
+      throw new Error('Connected to wrong network, please switch to ' + network);
+    }
     this.network = network;
     const accounts = await window.oyl.getAddresses();
     this.paymentAddress = accounts.nativeSegwit.address;
